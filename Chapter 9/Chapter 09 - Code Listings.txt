@@ -1,0 +1,662 @@
+--Listing 9-1. Populate Uniqueidentifier Table
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.UsingUniqueidentifier') IS NOT NULL
+    DROP TABLE dbo.UsingUniqueidentifier;
+
+CREATE TABLE dbo.UsingUniqueidentifier
+(
+RowID uniqueidentifier CONSTRAINT DF_GUIDValue DEFAULT NEWID()
+,Name sysname
+,JunkValue varchar(2000)
+);
+
+INSERT INTO dbo.UsingUniqueidentifier (Name, JunkValue)
+SELECT name, REPLICATE('X', 2000)
+FROM sys.columns
+
+CREATE CLUSTERED INDEX CLUS_UsingUniqueidentifier ON dbo.UsingUniqueidentifier(RowID);
+
+--Listing 9-2. View INSERT Index Fragmentation
+USE AdventureWorks2017
+GO
+
+SELECT index_type_desc
+  ,index_depth
+  ,index_level
+  ,page_count
+  ,record_count
+  ,CAST(avg_fragmentation_in_percent as DECIMAL(6,2)) as avg_frag_in_percent
+  ,fragment_count AS frag_count
+  ,avg_fragment_size_in_pages AS avg_frag_size_in_pages
+  ,CAST(avg_page_space_used_in_percent as DECIMAL(6,2)) as avg_page_space_used_in_percent
+FROM sys.dm_db_index_physical_stats(DB_ID(),OBJECT_ID('dbo.UsingUniqueidentifier'),NULL,NULL,'DETAILED')
+
+--Listing 9-3. INSERT into Uniqueidentifier Table
+USE AdventureWorks2017
+GO
+
+INSERT INTO dbo.UsingUniqueidentifier (Name, JunkValue)
+SELECT name, REPLICATE('X', 2000)
+FROM sys.objects
+
+--Listing 9-4. Create Nonclustered Index
+USE AdventureWorks2017
+GO
+
+CREATE NONCLUSTERED INDEX IX_Name ON dbo.UsingUniqueidentifier(Name) INCLUDE (JunkValue);
+
+--Listing 9-5. Create Table for UPDATE Operations
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.UpdateOperations') IS NOT NULL
+    DROP TABLE dbo.UpdateOperations;
+
+CREATE TABLE dbo.UpdateOperations
+(
+RowID int IDENTITY(1,1) 
+,Name sysname
+,JunkValue varchar(2000)
+);
+
+INSERT INTO dbo.UpdateOperations (Name, JunkValue)
+SELECT name, REPLICATE('X', 1000)
+FROM sys.columns
+
+CREATE CLUSTERED INDEX CLUS_UsingUniqueidentifier ON dbo.UpdateOperations(RowID);
+
+--Listing 9-6. View UPDATE Index Fragmentation 
+USE AdventureWorks2017
+GO
+
+SELECT index_type_desc 
+    ,index_depth 
+    ,index_level 
+    ,page_count 
+    ,record_count 
+    ,CAST(avg_fragmentation_in_percent as DECIMAL(6,2)) as avg_fragmentation_in_percent
+    ,fragment_count 
+    ,avg_fragment_size_in_pages 
+    ,CAST(avg_page_space_used_in_percent as DECIMAL(6,2)) as avg_page_space_used_in_percent
+FROM sys.dm_db_index_physical_stats(DB_ID(),OBJECT_ID('dbo.UpdateOperations'),NULL,NULL,'DETAILED')
+
+--Listing 9-7. Create Table for UPDATE Operations
+USE AdventureWorks2017
+GO
+
+UPDATE dbo.UpdateOperations
+SET JunkValue = REPLICATE('X', 2000)
+WHERE RowID % 5 = 1
+
+--Listing 9-8. Create Nonclustered Index for UPDATE operations
+USE AdventureWorks2017
+GO
+
+CREATE NONCLUSTERED INDEX IX_Name ON dbo.UpdateOperations(Name) INCLUDE (JunkValue);
+
+--Listing 9-9. UPDATE Operation to Change Index Key Value
+USE AdventureWorks2017
+GO
+
+UPDATE dbo.UpdateOperations
+SET Name = REVERSE(Name)
+WHERE RowID % 9 = 1
+
+--Listing 9-10. Creating a Table for DELETE Operation
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.DeleteOperations') IS NOT NULL
+    DROP TABLE dbo.DeleteOperations;
+
+CREATE TABLE dbo.DeleteOperations
+(
+RowID int IDENTITY(1,1) 
+,Name sysname
+,JunkValue varchar(2000)
+);
+
+INSERT INTO dbo.DeleteOperations (Name, JunkValue)
+SELECT name, REPLICATE('X', 1000)
+FROM sys.columns
+
+CREATE CLUSTERED INDEX CLUS_UsingUniqueidentifier ON dbo.DeleteOperations(RowID);
+
+--Listing 9-11. View DELETE Index Fragmentation
+USE AdventureWorks2017
+GO
+
+SELECT index_type_desc 
+    ,index_depth 
+    ,index_level 
+    ,page_count 
+    ,record_count 
+    ,CAST(avg_fragmentation_in_percent as DECIMAL(6,2)) as avg_fragmentation_in_percent
+    ,fragment_count 
+    ,avg_fragment_size_in_pages 
+    ,CAST(avg_page_space_used_in_percent as DECIMAL(6,2)) as avg_page_space_used_in_percent
+FROM sys.dm_db_index_physical_stats(DB_ID(),OBJECT_ID('dbo.DeleteOperations'),NULL,NULL,'DETAILED')
+
+--Listing 9-12. Performing DELETE Operation
+USE AdventureWorks2017
+GO
+
+DELETE dbo.DeleteOperations
+WHERE RowID % 100 BETWEEN 1 AND 50
+
+--Listing 9-13. View Index Fragmentation from Shrink
+Use Fragmentation
+GO
+
+SELECT index_type_desc 
+    ,index_depth 
+    ,index_level 
+    ,page_count 
+    ,record_count 
+    ,CAST(avg_fragmentation_in_percent as DECIMAL(6,2)) as avg_fragmentation_in_percent
+    ,fragment_count 
+    ,avg_fragment_size_in_pages 
+    ,CAST(avg_page_space_used_in_percent as DECIMAL(6,2)) as avg_page_space_used_in_percent
+FROM sys.dm_db_index_physical_stats(DB_ID(),OBJECT_ID('dbo.FirstTable'),NULL,NULL,'DETAILED')
+
+--Listing 9-14. Shrink Operation Database Preparation
+USE master
+GO
+IF EXISTS (SELECT * FROM sys.databases WHERE name = 'Fragmentation')
+DROP DATABASE Fragmentation
+GO
+
+CREATE DATABASE Fragmentation
+GO
+
+Use Fragmentation
+GO
+
+IF OBJECT_ID('dbo.FirstTable') IS NOT NULL
+    DROP TABLE dbo.FirstTable;
+
+CREATE TABLE dbo.FirstTable
+(
+RowID int IDENTITY(1,1)
+,Name sysname
+,JunkValue varchar(2000)
+,CONSTRAINT PK_FirstTable PRIMARY KEY CLUSTERED (RowID)
+);
+
+INSERT INTO dbo.FirstTable (Name, JunkValue)
+SELECT TOP 750 name, REPLICATE('X', 2000)
+FROM sys.columns
+
+IF OBJECT_ID('dbo.SecondTable') IS NOT NULL
+    DROP TABLE dbo.SecondTable;
+
+CREATE TABLE dbo.SecondTable
+(
+RowID int IDENTITY(1,1)
+,Name sysname
+,JunkValue varchar(2000)
+,CONSTRAINT PK_SecondTable PRIMARY KEY CLUSTERED (RowID)
+);
+
+INSERT INTO dbo.SecondTable (Name, JunkValue)
+SELECT TOP 750 name, REPLICATE('X', 2000)
+FROM sys.columns
+GO
+
+INSERT INTO dbo.FirstTable (Name, JunkValue)
+SELECT TOP 750 name, REPLICATE('X', 2000)
+FROM sys.columns
+GO
+
+INSERT INTO dbo.SecondTable (Name, JunkValue)
+SELECT TOP 750 name, REPLICATE('X', 2000)
+FROM sys.columns
+GO
+
+INSERT INTO dbo.FirstTable (Name, JunkValue)
+SELECT TOP 750 name, REPLICATE('X', 2000)
+FROM sys.columns
+GO
+
+IF OBJECT_ID('dbo.SecondTable') IS NOT NULL
+    DROP TABLE dbo.SecondTable;
+GO
+
+--Listing 9-15. Shrink Operation
+DBCC SHRINKDATABASE (Fragmentation)
+
+--Listing 9-16.  Impact of Deletes on Heap Page Allocations
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.HeapTable') IS NOT NULL
+    DROP TABLE dbo.HeapTable;
+
+CREATE TABLE dbo.HeapTable
+(
+    RowId INT IDENTITY(1,1)
+    ,FillerData VARCHAR(2500)
+);
+
+INSERT INTO dbo.HeapTable (FillerData)
+SELECT TOP 400 REPLICATE('X',2000)
+FROM sys.objects;
+
+SELECT OBJECT_NAME(object_id), index_type_desc, page_count, record_count, forwarded_record_count
+FROM sys.dm_db_index_physical_stats (DB_ID(),OBJECT_ID('dbo.HeapTable'),NULL,NULL,'DETAILED');
+
+SET STATISTICS IO ON;
+SELECT COUNT(*) FROM dbo.HeapTable;
+SET STATISTICS IO OFF;
+
+DELETE FROM dbo.HeapTable
+WHERE RowId % 2 = 0;
+
+SELECT OBJECT_NAME(object_id), index_type_desc, page_count, record_count, forwarded_record_count
+FROM sys.dm_db_index_physical_stats (DB_ID(),OBJECT_ID('dbo.HeapTable'),NULL,NULL,'DETAILED');
+
+SET STATISTICS IO ON;
+SELECT COUNT(*) FROM dbo.HeapTable;
+SET STATISTICS IO OFF;
+
+ALTER TABLE dbo.HeapTable REBUILD;
+
+SELECT OBJECT_NAME(object_id), index_type_desc, page_count, record_count, forwarded_record_count
+FROM sys.dm_db_index_physical_stats (DB_ID(),OBJECT_ID('dbo.HeapTable'),NULL,NULL,'DETAILED');
+
+SET STATISTICS IO ON;
+SELECT COUNT(*) FROM dbo.HeapTable;
+SET STATISTICS IO OFF;
+
+--Listing 9-17.  Forward Record Impact on Query Performance
+SET NOCOUNT ON
+
+IF OBJECT_ID('dbo.ForwardedRecords') IS NOT NULL
+    DROP TABLE dbo.ForwardedRecords;
+
+CREATE TABLE dbo.ForwardedRecords
+    (
+    ID INT IDENTITY(1,1)
+    ,VALUE VARCHAR(8000)
+    );
+
+CREATE NONCLUSTERED INDEX IX_ForwardedRecords_ID ON dbo.ForwardedRecords(ID);
+
+INSERT INTO dbo.ForwardedRecords (VALUE)
+SELECT REPLICATE(type, 500)
+FROM sys.objects;
+
+SET STATISTICS IO ON
+PRINT '*** No forwarded records'
+SELECT * FROM dbo.ForwardedRecords;
+
+SELECT * FROM dbo.ForwardedRecords
+WHERE ID = 40;
+
+SELECT * FROM dbo.ForwardedRecords
+WHERE ID BETWEEN 40 AND 60;
+SET STATISTICS IO OFF
+
+UPDATE dbo.ForwardedRecords
+SET VALUE =REPLICATE(VALUE, 16)
+WHERE ID%3 = 1;
+
+SET STATISTICS IO ON
+PRINT '*** With forwarded records'
+SELECT * FROM dbo.ForwardedRecords;
+
+SELECT * FROM dbo.ForwardedRecords
+WHERE ID = 40;
+
+SELECT * FROM dbo.ForwardedRecords
+WHERE ID BETWEEN 40 AND 60;
+SET STATISTICS IO OFF
+
+--Listing 9-18.  Prepare Columnstore Table
+USE ContosoRetailDW
+GO
+
+IF OBJECT_ID('dbo.FactOnlineSalesCI') IS NOT NULL
+    DROP TABLE dbo.FactOnlineSalesCI
+
+CREATE TABLE dbo.FactOnlineSalesCI(
+    [OnlineSalesKey] [int] NOT NULL,
+    [DateKey] [datetime] NOT NULL,
+    [StoreKey] [int] NOT NULL,
+    [ProductKey] [int] NOT NULL,
+    [PromotionKey] [int] NOT NULL,
+    [CurrencyKey] [int] NOT NULL,
+    [CustomerKey] [int] NOT NULL,
+    [SalesOrderNumber] [nvarchar](20) NOT NULL,
+    [SalesOrderLineNumber] [int] NULL,
+    [SalesQuantity] [int] NOT NULL,
+    [SalesAmount] [money] NOT NULL,
+    [ReturnQuantity] [int] NOT NULL,
+    [ReturnAmount] [money] NULL,
+    [DiscountQuantity] [int] NULL,
+    [DiscountAmount] [money] NULL,
+    [TotalCost] [money] NOT NULL,
+    [UnitCost] [money] NULL,
+    [UnitPrice] [money] NULL,
+    [ETLLoadID] [int] NULL,
+    [LoadDate] [datetime] NULL,
+    [UpdateDate] [datetime] NULL
+) 
+
+INSERT INTO dbo.FactOnlineSalesCI
+SELECT *
+FROM dbo.FactOnlineSales
+
+CREATE CLUSTERED COLUMNSTORE INDEX FactOnlineSalesCI_CCI ON dbo.FactOnlineSalesCI
+
+DECLARE @we int= 1
+
+WHILE @we <= 5
+BEGIN
+    INSERT INTO dbo.FactOnlineSalesCI
+    SELECT TOP 1000 *
+    FROM dbo.FactOnlineSales
+    ALTER INDEX ALL ON dbo.FactOnlineSalesCI REORGANIZE
+        WITH (COMPRESS_ALL_ROW_GROUPS =ON)
+    SET @we += 1
+END
+
+WHILE @we <= 10
+BEGIN
+    INSERT INTO dbo.FactOnlineSalesCI
+    SELECT TOP 105000 *
+    FROM dbo.FactOnlineSales
+    SET @we += 1
+END
+
+SELECT*
+FROM sys.column_store_row_groups
+WHERE object_id=OBJECT_ID('dbo.FactOnlineSalesCI')
+ORDER BY row_group_id DESC
+
+--Listing 9-19. Impact of Inserts on Columnstore Table
+USE ContosoRetailDW
+GO
+
+SET STATISTICS IO ON
+
+SELECT DateKey,COUNT(*)
+FROM dbo.FactOnlineSalesCI
+GROUP BY DateKey
+
+ALTER INDEX ALL ON dbo.FactOnlineSalesCI REBUILD
+
+SELECT DateKey,COUNT(*)
+FROM dbo.FactOnlineSalesCI
+GROUP BY DateKey
+
+SET STATISTICS IO OFF
+
+SELECT * 
+FROM sys.column_store_row_groups
+WHERE object_id = OBJECT_ID('dbo.FactOnlineSalesCI')
+ORDER BY row_group_id DESC
+
+--Listing 9-20. Delete Operations on a Clustered Columnstore Index
+USE ContosoRetailDW
+GO
+
+SET STATISTICS IO ON
+
+SELECT DateKey,COUNT(*)
+FROM dbo.FactOnlineSalesCI
+GROUP BY DateKey
+
+DELETE FROM dbo.FactOnlineSalesCI
+WHERE DateKey <'2008-01-01'
+
+SELECT DateKey,COUNT(*)
+FROM dbo.FactOnlineSalesCI
+GROUP BY DateKey
+
+ALTER INDEX ALL ON dbo.FactOnlineSalesCI REBUILD
+
+SELECT DateKey,COUNT(*)
+FROM dbo.FactOnlineSalesCI
+GROUP BY DateKey
+
+SET STATISTICS IO OFF
+
+--Listing 9-21. View Index Fragmentation for I/O Example
+SELECT index_type_desc 
+    ,index_depth 
+    ,index_level 
+    ,page_count 
+    ,record_count 
+    ,CAST(avg_fragmentation_in_percent as DECIMAL(6,2)) as avg_fragmentation_in_percent
+    ,fragment_count 
+    ,avg_fragment_size_in_pages 
+    ,CAST(avg_page_space_used_in_percent as DECIMAL(6,2)) as avg_page_space_used_in_percent
+FROM sys.dm_db_index_physical_stats(DB_ID(),OBJECT_ID('dbo.IndexIO'),NULL,NULL,'DETAILED')
+
+--Listing 9-22. Script to Build Index I/O Example
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.IndexIO') IS NOT NULL
+    DROP TABLE dbo.IndexIO;
+
+CREATE TABLE dbo.IndexIO
+(
+RowID int IDENTITY(1,1) 
+,Name sysname
+,JunkValue varchar(2000)
+);
+
+INSERT INTO dbo.IndexIO (Name, JunkValue)
+SELECT name, REPLICATE('X', 1000)
+FROM sys.columns
+
+CREATE CLUSTERED INDEX CLUS_IndexIO ON dbo.IndexIO(RowID);
+
+UPDATE dbo.IndexIO
+SET JunkValue = REPLICATE('X', 2000)
+WHERE RowID % 5 = 1
+
+SELECT we.name, ps.in_row_reserved_page_count
+FROM sys.indexes we
+INNER JOIN sys.dm_db_partition_stats ps ON we.object_id = ps.object_id AND we.index_id = ps.index_id
+WHERE we.name = 'CLUS_IndexIO'
+
+--Listing 9-23. Script to Rebuild Index to Remove Fragmentation
+USE AdventureWorks2017
+GO
+
+ALTER INDEX CLUS_IndexIO ON dbo.IndexIO REBUILD
+
+SELECT we.name, ps.in_row_reserved_page_count
+FROM sys.indexes we
+INNER JOIN sys.dm_db_partition_stats ps ON we.object_id = ps.object_id AND we.index_id = ps.index_id
+WHERE we.name = 'CLUS_IndexIO'
+
+--Listing 9-24. Index Rebuild with CREATE INDEX
+CREATE [ UNIQUE ] [ CLUSTERED | NONCLUSTERED ] INDEX index_name
+    ON <object> ( column [ ASC | DESC ] [ ,...n ] )
+    [ INCLUDE ( column_name [ ,...n ] ) ]
+    [ WHERE <filter_predicate> ]
+    [ WITH ( <relational_index_option> [ ,...n ] ) ]
+    [ ON { partition_scheme_name ( column_name )
+         | filegroup_name
+         | default 
+         }
+    ]
+    [ FILESTREAM_ON { filestream_filegroup_name | partition_scheme_name | "NULL" } ]
+[ ; ]
+<relational_index_option> ::=
+   DROP_EXISTING = { ON | OFF }
+   | ONLINE = { ON | OFF }
+   | RESUMABLE = {ON | OF }
+   | MAX_DURATION = <time> [MINUTES]
+
+--Listing 9-25. Index Rebuild with ALTER INDEX
+ALTER INDEX { index_name | ALL }
+    ON <object>
+    { REBUILD 
+        [ [PARTITION = ALL]
+          [ WITH ( <rebuild_index_option> [ ,...n ] ) ] 
+          | [ PARTITION = partition_number
+                [ WITH ( <single_partition_rebuild_index_option>
+                        [ ,...n ] )
+                ] 
+            ]
+        ]
+
+--Listing 9-26. Index Reorganization with ALTER INDEX
+ALTER INDEX { index_name | ALL }
+    ON <object>
+    | REORGANIZE 
+        [ PARTITION =partition_number ]
+        [ WITH ( LOB_COMPACTION = { ON | OFF } ) ]
+
+--Listing 9-27. Index Defragmentation Script Template
+DECLARE @MaxFragmentation TINYINT=30
+,@MinimumPages SMALLINT=1000
+,@SQL nvarchar(max)
+,@ObjectName NVARCHAR(300)
+,@IndexName NVARCHAR(300)
+,@CurrentFragmentation DECIMAL(9, 6)
+
+DECLARE @FragmentationState TABLE
+(
+SchemaName SYSNAME
+,TableName SYSNAME
+,object_id INT
+,IndexName SYSNAME
+,index_id INT
+,page_count BIGINT
+,avg_fragmentation_in_percent FLOAT
+,avg_page_space_used_in_percent FLOAT
+,type_desc VARCHAR(255)
+)
+
+INSERT INTO @FragmentationState
+<Script to Collect Fragmenation Data (Listing 9-28)>
+
+DECLARE INDEX_CURSE CURSOR LOCAL FAST_FORWARD FOR
+<Script to Identify Fragmented Indexes (Listing 9-29)>
+
+OPEN INDEX_CURSE
+
+WHILE 1=1
+BEGIN 
+    FETCH NEXT FROM INDEX_CURSE INTO @ObjectName, @IndexName
+        ,@CurrentFragmentation
+
+    IF @@FETCH_STATUS <> 0
+        BREAK
+
+<Script to Build Index Defragmentation Statements(Listing 9-30)>
+
+    EXEC sp_ExecuteSQL @SQL
+ END
+
+CLOSE INDEX_CURSE
+DEALLOCATE INDEX_CURSE
+
+--Listing 9-28. Script to Collect Fragmenation Data
+SELECT
+    s.name as SchemaName
+    ,t.name as TableName
+    ,t.object_id
+    ,we.name as IndexName
+    ,we.index_id
+    ,x.page_count
+    ,x.avg_fragmentation_in_percent
+    ,x.avg_page_space_used_in_percent
+    ,we.type_desc
+FROM sys.dm_db_index_physical_stats(db_id(), NULL, NULL, NULL, 'SAMPLED') x
+    INNER JOIN sys.tables t ON x.object_id = t.object_id
+    INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+    INNER JOIN sys.indexes we ON x.object_id = we.object_id AND x.index_id = we.index_id
+WHERE x.index_id > 0
+AND x.avg_fragmentation_in_percent > 0
+AND alloc_unit_type_desc = 'IN_ROW_DATA'
+
+--Listing 9-29. Script to Identify Fragmented Indexes
+SELECT  QUOTENAME(x.SchemaName)+'.'+QUOTENAME(x.TableName)
+    ,CASE WHEN x.type_desc = 'CLUSTERED' THEN 'ALL'
+        ELSE QUOTENAME(x.IndexName) END
+    ,x.avg_fragmentation_in_percent
+FROM    @FragmentationState x
+LEFT OUTER JOIN @FragmentationState y ON x.object_id = y.object_id AND y.index_id = 1
+WHERE   (
+        x.type_desc = 'CLUSTERED'
+        AND y.type_desc = 'CLUSTERED'
+        )
+        OR y.index_id IS NULL
+ORDER BY x.object_id
+        ,x.index_id
+
+--Listing 9-30. Script to Build Index Defragmentation Statements
+SET @SQL = CONCAT('ALTER INDEX ', @IndexName,' ON ',@ObjectName,
+  CASE WHEN @CurrentFragmentation <= 30 THEN ' REORGANIZE;'
+  ELSE ' REBUILD' END,
+  CASE WHEN CONVERT(VARCHAR(100), SERVERPROPERTY('Edition')) LIKE 'Enterprise%'
+  OR CONVERT(VARCHAR(100), SERVERPROPERTY('Edition')) LIKE 'Developer%' 
+  THEN ' WITH (ONLINE=ON, SORT_IN_TEMPDB=ON) ' END, ';');
+
+--Listing 9-31. Index Defragmentation Statements
+ALTER INDEX ALL ON [HumanResources].[EmployeePayHistory] REBUILD WITH (ONLINE=ON, SORT_IN_TEMPDB=ON) ;
+ALTER INDEX ALL ON [HumanResources].[JobCandidate] REORGANIZE; WITH (ONLINE=ON, SORT_IN_TEMPDB=ON) ;
+ALTER INDEX ALL ON [dbo].[AllocationCycle] REBUILD WITH (ONLINE=ON, SORT_IN_TEMPDB=ON) ;
+ALTER INDEX ALL ON [dbo].[PageCompression] REORGANIZE; WITH (ONLINE=ON, SORT_IN_TEMPDB=ON) ;
+ALTER INDEX ALL ON [Sales].[SalesPersonQuotaHistory] REBUILD WITH (ONLINE=ON, SORT_IN_TEMPDB=ON) ;
+
+--Listing 9-32. sp_updatestats Syntax
+sp_updatestats [ [ @resample = ] 'resample']
+
+--Listing 9-33. UPDATE STATISTICS Syntax
+UPDATE STATISTICS table_or_indexed_view_name 
+    [ 
+        { 
+            { index_or_statistics_name }
+          | ( { index_or_statistics_name } [ ,...n ] )
+                }
+    ] 
+    [    WITH 
+        [ 
+        FULLSCAN   
+         [ [ , ] PERSIST_SAMPLE_PERCENT = { ON | OFF } ]    
+        | SAMPLE number { PERCENT | ROWS }   
+         [ [ , ] PERSIST_SAMPLE_PERCENT = { ON | OFF } ]    
+        | RESAMPLE   
+         [ ON PARTITIONS ( { <partition_number> | <range> } [, ...n] ) ] ] 
+        [ [ , ] [ ALL | COLUMNS | INDEX ] 
+        [ [ , ] NORECOMPUTE ] 
+        [ [ , ] INCREMENTAL = { ON | OFF } ] 
+        [ [ , ] MAXDOP = max_degree_of_parallelism ]
+    ] ;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

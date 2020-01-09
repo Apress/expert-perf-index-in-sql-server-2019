@@ -1,0 +1,305 @@
+--Listing 2-1.  sys.dm_db_database_page_allocations Syntax
+SELECT * FROM sys.dm_db_database_page_allocations ({database_id}, 
+{TableId | NULL}, {IndexId | NULL}, { PartitionId | NULL }, 
+{DETAILED | LIMITED})
+
+--Listing 2-2.  Script for creating dbo.IndexInternalsOne with 12 rows 
+USE master;
+GO
+CREATE DATABASE Chapter2Internals;
+GO
+USE Chapter2Internals;
+GO
+CREATE TABLE dbo.IndexInternalsOne
+(
+    RowID INT IDENTITY(1, 1),
+    FillerData CHAR(8000)
+);
+GO
+INSERT INTO dbo.IndexInternalsOne
+DEFAULT VALUES;
+GO 12
+
+--Listing 2-3.  Extent allocation with sys.dm_db_database_page_allocations 
+SELECT DPA.extent_file_id,
+       DPA.extent_page_id,
+       DPA.page_type_desc,
+       DPA.allocation_unit_type_desc,
+       DPA.is_iam_page,
+       DPA.is_mixed_page_allocation,
+       COUNT(*) AS page_count
+FROM sys.dm_db_database_page_allocations(DB_ID(), OBJECT_ID('dbo.IndexInternalsOne'), NULL, NULL, 'DETAILED') DPA
+GROUP BY DPA.extent_file_id,
+         DPA.extent_page_id,
+         DPA.page_type_desc,
+         DPA.allocation_unit_type_desc,
+         DPA.is_iam_page,
+         DPA.is_mixed_page_allocation
+ORDER BY DPA.extent_page_id,
+         DPA.page_type_desc;
+
+--Listing 2-4.  Script for creating dbo.IndexInternalsTwo with 12 rows 
+USE Chapter2Internals;
+GO
+
+CREATE TABLE dbo.IndexInternalsTwo
+(
+    RowID INT IDENTITY(1, 1) PRIMARY KEY,
+    FillerData CHAR(8000)
+);
+GO
+INSERT INTO dbo.IndexInternalsTwo
+DEFAULT VALUES;
+GO 6
+SELECT DPA.extent_file_id,
+       DPA.extent_page_id,
+       DPA.page_type_desc,
+       DPA.allocation_unit_type_desc,
+       DPA.is_iam_page,
+       DPA.is_mixed_page_allocation,
+       COUNT(*) AS page_count
+FROM sys.dm_db_database_page_allocations(DB_ID(), OBJECT_ID('dbo.IndexInternalsTwo'), NULL, NULL, 'DETAILED') DPA
+GROUP BY DPA.extent_file_id,
+         DPA.extent_page_id,
+         DPA.page_type_desc,
+         DPA.allocation_unit_type_desc,
+         DPA.is_iam_page,
+         DPA.is_mixed_page_allocation
+ORDER BY DPA.extent_page_id,
+         DPA.page_type_desc;
+
+--Listing 2-5.  Script for reviewing all allocated pages 
+SELECT DPA.page_type_desc,
+       DPA.allocation_unit_type_desc,
+       DPA.object_id,
+       DPA.index_id,
+       DPA.extent_page_id,
+       DPA.allocated_page_iam_page_id,
+       DPA.allocated_page_page_id,
+       DPA.page_level,
+       DPA.next_page_page_id,
+       DPA.previous_page_page_id
+FROM sys.dm_db_database_page_allocations(DB_ID(), OBJECT_ID('dbo.IndexInternalsTwo'), NULL, NULL, 'DETAILED') DPA
+
+--Listing 2-6.  sys.dm_db_page_info Syntax
+SELECT * FROM sys.dm_db_database_page_allocations ({database_id}, 
+{FileId}, {PageId}, {DETAILED | LIMITED})
+
+--Listing 2-7.  Query using sys.dm_db_page_info
+SELECT T.name,
+       DPA.page_type_desc,
+	   DPI.page_id,
+       DPI.pfs_page_id,
+       DPI.gam_page_id,
+       DPI.sgam_page_id,
+       DPI.diff_map_page_id,
+       DPI.ml_map_page_id,
+       DPI.prev_page_page_id,
+       DPI.next_page_page_id,
+       DPI.fixed_length,
+       DPI.slot_count,
+       DPI.free_bytes
+FROM sys.dm_db_database_page_allocations(DB_ID(), NULL, NULL, NULL, 'DETAILED') DPA
+    INNER JOIN sys.tables T ON T.object_id = DPA.object_id
+    CROSS APPLY sys.dm_db_page_info(DPA.database_id, DPA.allocated_page_file_id, DPA.allocated_page_page_id, DEFAULT) DPI;
+
+--Listing 2-8. DBCC EXTENTINFO Syntax
+DBCC EXTENTINFO ( {database_name | database_id | 0}
+    , {table_name | table_object_id}, { index_name | index_id | -1}
+    , { partition_id | 0}
+
+--Listing 2-9. DBCC EXTENTINFO dbo.IndexInternalsOne 
+USE Chapter2Internals
+GO
+DBCC EXTENTINFO(0, IndexInternalsOne, -1)
+
+--Listing 2-10. DBCC IND Syntax
+DBCC IND ( {'dbname' | dbid}, {'table_name' | table_object_id}, 
+           {'index_name' | index_id | -1})
+
+--Listing 2-11. DBCC IND Example
+USE Chapter2Internals;
+GO
+
+DBCC IND (0, 'IndexInternalsOne',-1);
+
+--Listing 2-12. DBCC IND Clustered Index Example
+USE Chapter2Internals
+GO
+
+CREATE TABLE dbo.IndexInternalsThree
+        (
+        RowID INT IDENTITY(1,1) 
+        ,FillerData CHAR(8000)
+        ,CONSTRAINT PK_IndexInternalsThree  PRIMARY KEY CLUSTERED (RowID)
+        )
+GO
+INSERT INTO dbo.IndexInternalsThree DEFAULT VALUES
+GO 4
+DBCC IND (0, 'IndexInternalsThree',-1)
+
+--Listing 2-13. DBCC IND Output from sys.dm_db_database_page_allocations
+USE Chapter2Internals;
+GO
+
+SELECT
+allocated_page_file_id AS PageFID
+,allocated_page_page_id AS PagePID
+,allocated_page_iam_file_id AS IAMFID
+,allocated_page_iam_page_id AS IAMPID
+,object_id AS ObjectID
+,index_id AS IndexID
+,partition_id AS PartitionNumber
+,rowset_id AS PartitionID
+,allocation_unit_type_desc AS iam_chain_type
+,page_type AS PageType
+,page_level AS IndexLevel
+,next_page_file_id AS NextPageFID
+,next_page_page_id AS NextPagePID
+,previous_page_file_id AS PrevPageFID
+,previous_page_page_id AS PrevPagePID
+FROM sys.dm_db_database_page_allocations(DB_ID(), OBJECT_ID('dbo.IndexInternalsTwo'), 1, NULL, 'DETAILED')
+WHERE is_allocated = 1;
+GO
+
+DBCC IND (0,'dbo.IndexInternalsTwo',1)
+
+--Listing 2-14. DBCC PAGE Syntax
+DBCC PAGE ( { database_name | database_id | 0}, file_number, page_number 
+            [,print_option ={0|1|2|3} ])
+
+--Listing 2-15. DBCC IND Query for DBCC PAGE Examples
+USE [Chapter2Internals];
+GO
+
+CREATE TABLE dbo.IndexInternalsFour (
+    RowID INT IDENTITY(1, 1) NOT NULL,
+    FillerData VARCHAR(2000) NULL,
+    CONSTRAINT PK_IndexInternalsFour
+        PRIMARY KEY CLUSTERED ([RowID] ASC));
+
+INSERT INTO dbo.IndexInternalsFour (FillerData)
+VALUES (REPLICATE(1, 2000)),
+(REPLICATE(2, 2000)), (REPLICATE(3, 2000)),
+(REPLICATE(4, 2000)), (REPLICATE(5, 25));
+
+SELECT allocated_page_file_id AS PageFID,
+       allocated_page_page_id AS PagePID,
+       allocated_page_iam_file_id AS IAMFID,
+       allocated_page_iam_page_id AS IAMPID,
+       index_id AS IndexID,
+       allocation_unit_type_desc AS iam_chain_type,
+       page_type_desc,
+       page_level AS IndexLevel,
+       next_page_file_id AS NextPageFID,
+       next_page_page_id AS NextPagePID,
+       previous_page_file_id AS PrevPageFID,
+       previous_page_page_id AS PrevPagePID
+FROM sys.dm_db_database_page_allocations(DB_ID(), OBJECT_ID('dbo.IndexInternalsFour'), 1, NULL, 'DETAILED')
+WHERE is_allocated = 1;
+
+--Listing 2-16. DBCC PAGE with Page Header–Only Print Option
+DBCC TRACEON(3604)
+DBCC PAGE(0,1,377,0)
+
+--Listing 2-17. DBCC PAGE with Hex Rows Print Option
+DBCC TRACEON(3604)
+DBCC PAGE(0,1,377,1)
+
+--Listing 2-18. DBCC PAGE with Hex Data Print Option
+USE Chapter2Internals
+GO
+
+DBCC TRACEON(3604)
+DBCC PAGE(0,1,377,2)  
+
+--Listing 2-19. DBCC PAGE with Row Data Print Option
+USE Chapter2Internals
+GO
+
+DBCC TRACEON(3604)
+DBCC PAGE(0,1,378,3) -- Data page
+DBCC PAGE(0,1,377,3) -- Index page
+
+--Listing 2-20. Forwarded Record Scenario
+USE AdventureWorks2017
+GO
+
+CREATE TABLE dbo.HeapForwardedRecords
+(
+  RowId INT IDENTITY(1,1)
+  ,FillerData VARCHAR(2500)
+);
+
+INSERT INTO dbo.HeapForwardedRecords (FillerData)
+SELECT TOP 24 REPLICATE('X',2000)
+FROM sys.objects;
+
+DECLARE @ObjectID INT = OBJECT_ID('dbo.HeapForwardedRecords');
+
+SELECT object_id, index_type_desc, page_count, record_count, forwarded_record_count
+FROM sys.dm_db_index_physical_stats (DB_ID(), @ObjectID, NULL, NULL, 'DETAILED');
+
+--Listing 2-21. Script to Cause Forwarded Records
+USE AdventureWorks2017
+GO
+
+UPDATE dbo.HeapForwardedRecords
+SET FillerData = REPLICATE('X',2500)
+WHERE RowId % 2 = 0;
+
+DECLARE @ObjectID INT = OBJECT_ID('dbo.HeapForwardedRecords');
+
+SELECT object_id, index_type_desc, page_count, record_count, forwarded_record_count
+FROM sys.dm_db_index_physical_stats (DB_ID(), @ObjectID, NULL, NULL, 'DETAILED');
+
+--Listing 2-22. Page Split Scenario
+USE AdventureWorks2017
+GO
+
+CREATE TABLE dbo.ClusteredPageSplits
+(
+  RowId INT IDENTITY(1,1)
+  ,FillerData VARCHAR(2500)
+  ,CONSTRAINT PK_ClusteredPageSplits PRIMARY KEY CLUSTERED (RowId)
+);
+
+INSERT INTO dbo.ClusteredPageSplits (FillerData)
+SELECT TOP 24 REPLICATE('X',2000)
+FROM sys.objects;
+
+DECLARE @ObjectID INT = OBJECT_ID('dbo.ClusteredPageSplits');
+
+SELECT object_id, index_type_desc, index_level, page_count, record_count
+FROM sys.dm_db_index_physical_stats (DB_ID(), @ObjectID, NULL, NULL, 'DETAILED');
+
+--Listing 2-23. Script to Cause Page Splits
+USE AdventureWorks2017
+GO
+
+UPDATE dbo.ClusteredPageSplits
+SET FillerData = REPLICATE('X',2500)
+WHERE RowId % 2 = 0;
+
+DECLARE @ObjectID INT = OBJECT_ID('dbo.ClusteredPageSplits');
+
+SELECT object_id, index_type_desc, index_level, page_count, record_count
+FROM sys.dm_db_index_physical_stats (DB_ID(), @ObjectID, NULL, NULL, 'DETAILED');
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

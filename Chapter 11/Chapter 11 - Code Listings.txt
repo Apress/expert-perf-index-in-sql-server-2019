@@ -1,0 +1,996 @@
+--Listing 11-1. Temporary Object with Heap
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('tempdb..##TempWithHeap') IS NOT NULL
+    DROP TABLE ##TempWithHeap
+
+CREATE TABLE ##TempWithHeap
+    (
+    SalesOrderID INT
+    );
+
+INSERT INTO ##TempWithHeap
+SELECT SalesOrderID
+FROM Sales.SalesOrderHeader
+WHERE SalesPersonID = 283;
+
+SELECT sod.* FROM Sales.SalesOrderDetail sod
+    INNER JOIN ##TempWithHeap t ON t.SalesOrderID = sod.SalesOrderID;
+GO
+
+--Listing 11-2. Temporary Object with Clustered Index
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('tempdb..##TempWithClusteredIX') IS NOT NULL
+    DROP TABLE ##TempWithClusteredIX
+
+CREATE TABLE ##TempWithClusteredIX
+    (
+    SalesOrderID INT PRIMARY KEY CLUSTERED
+    )
+
+INSERT INTO ##TempWithClusteredIX
+SELECT SalesOrderID
+FROM Sales.SalesOrderHeader
+WHERE SalesPersonID = 283
+
+SELECT sod.* FROM Sales.SalesOrderDetail sod
+INNER JOIN ##TempWithClusteredIX t ON t.SalesOrderID = sod.SalesOrderID
+GO
+
+--Listing 11-3. EXISTS Example
+USE AdventureWorks2017
+GO
+
+SELECT sod.* FROM Sales.SalesOrderDetail sod
+WHERE EXISTS (SELECT * FROM ##TempWithHeap t WHERE t.SalesOrderID = sod.SalesOrderID);
+GO
+
+SELECT sod.* FROM Sales.SalesOrderDetail sod
+WHERE EXISTS (SELECT * FROM ##TempWithClusteredIX t WHERE t.SalesOrderID = sod.SalesOrderID);
+
+--Listing 11-4. Creating and Populating Table for Identity Sequence Pattern
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('IndexStrategiesFruit_Identity') IS NOT NULL
+    DROP TABLE IndexStrategiesFruit_Identity
+
+CREATE TABLE dbo.IndexStrategiesFruit_Identity
+(
+FruitID int IDENTITY(1,1)
+,FruitName varchar(25)
+,Color varchar(10)
+,CONSTRAINT PK_Fruit_FruitID_Idnt PRIMARY KEY CLUSTERED (FruitID)
+);
+
+INSERT INTO dbo.IndexStrategiesFruit_Identity(FruitName, Color)
+VALUES('Apple','Red'),('Banana','Yellow'),('Apple','Green'),('Grape','Green');
+
+SELECT FruitID, FruitName, Color
+FROM dbo.IndexStrategiesFruit_Identity;
+
+IF OBJECT_ID('IndexStrategiesFruit_Sequence') IS NOT NULL
+    DROP TABLE IndexStrategiesFruit_Sequence
+
+IF OBJECT_ID('FruitSequence') IS NOT NULL
+    DROP SEQUENCE FruitSequence
+
+CREATE SEQUENCE FruitSequence AS INTEGER
+    START WITH 1;
+
+CREATE TABLE dbo.IndexStrategiesFruit_Sequence
+(
+FruitID int DEFAULT NEXT VALUE FOR FruitSequence
+,FruitName varchar(25)
+,Color varchar(10)
+,CONSTRAINT PK_Fruit_FruitID_Seq PRIMARY KEY CLUSTERED (FruitID)
+);
+
+INSERT INTO dbo.IndexStrategiesFruit_Sequence(FruitName, Color)
+VALUES('Apple','Red'),('Banana','Yellow'),('Apple','Green'),('Grape','Green');
+
+SELECT FruitID, FruitName, Color
+FROM dbo.IndexStrategiesFruit_Sequence;
+
+--Listing 11-5. Creating and Populating Table for Natural Key Pattern
+USE AdventureWorks2017
+GO
+
+CREATE TABLE dbo.IndexStrategiesNatural
+(
+StateAbbreviation char(2)
+,StateName varchar(25)
+,Country varchar(25)
+,CONSTRAINT PK_State_StateAbbreviation PRIMARY KEY CLUSTERED (StateAbbreviation)
+);
+
+INSERT INTO dbo.IndexStrategiesNatural(StateAbbreviation, StateName, Country)
+VALUES('MN','Minnesota','United States')
+,('FL','Florida','United States')
+,('WI','Wisconsin','United States')
+,('NH','New Hampshire','United States');
+
+SELECT StateAbbreviation, StateName, Country
+FROM dbo.IndexStrategiesNatural;
+
+--Listing 11-6. Creating and Populating Tables for Foreign Key Pattern
+USE AdventureWorks2017
+GO
+
+CREATE TABLE dbo.IndexStrategiesHeader
+(
+HeaderID int IDENTITY(1,1)
+,FillerData char(250)
+,CONSTRAINT PK_Header_HeaderID PRIMARY KEY CLUSTERED (HeaderID)
+);
+
+CREATE TABLE dbo.IndexStrategiesDetail_ICP
+(
+DetailID int IDENTITY(1,1)
+,HeaderID int
+,FillerData char(500)
+,CONSTRAINT PK_Detail_ICP_DetailID PRIMARY KEY CLUSTERED (DetailID)
+,CONSTRAINT FK_Detail_ICP_HeaderID FOREIGN KEY (HeaderID) REFERENCES IndexStrategiesHeader(HeaderID)
+);
+CREATE INDEX IX_Detail_ICP_HeaderID ON dbo.IndexStrategiesDetail_ICP (HeaderID)
+
+CREATE TABLE dbo.IndexStrategiesDetail_FKP
+(
+DetailID int IDENTITY(1,1)
+,HeaderID int
+,FillerData char(500)
+,CONSTRAINT PK_Detail_FKP_DetailID PRIMARY KEY NONCLUSTERED (DetailID)
+,CONSTRAINT CLUS_Detail_FKP_HeaderIDDetailID UNIQUE CLUSTERED (HeaderID, DetailID)
+,CONSTRAINT FK_Detail_FKP_HeaderID FOREIGN KEY (HeaderID) REFERENCES IndexStrategiesHeader(HeaderID)
+);
+GO
+
+INSERT INTO dbo.IndexStrategiesHeader(FillerData)
+SELECT CONVERT(varchar,object_id)+name
+FROM sys.indexes
+
+INSERT INTO dbo.IndexStrategiesDetail_ICP
+SELECT ish.HeaderID, CONVERT(varchar,ic.index_column_id)+'-'+FillerData
+FROM dbo.IndexStrategiesHeader ish
+        INNER JOIN sys.indexes i ON ish.FillerData = CONVERT(varchar,i.object_id)+i.name
+        INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+
+INSERT INTO dbo.IndexStrategiesDetail_FKP
+SELECT ish.HeaderID, CONVERT(varchar,ic.index_column_id)+'-'+FillerData
+FROM dbo.IndexStrategiesHeader ish
+        INNER JOIN sys.indexes i ON ish.FillerData = CONVERT(varchar,i.object_id)+i.name
+        INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+
+--Listing 11-7. Single Header Row on Foreign Key Pattern
+Use AdventureWorks2017
+GO
+
+SET STATISTICS IO ON
+
+SELECT  ish.HeaderID, ish.FillerData, isd.DetailID, isd.FillerData
+FROM dbo.IndexStrategiesHeader ish
+        INNER JOIN dbo.IndexStrategiesDetail_ICP isd ON ish.HeaderID = isd.HeaderID
+WHERE ish.HeaderID = 10
+
+SELECT  ish.HeaderID, ish.FillerData, isd.DetailID, isd.FillerData
+FROM dbo.IndexStrategiesHeader ish
+        INNER JOIN dbo.IndexStrategiesDetail_FKP isd ON ish.HeaderID = isd.HeaderID
+WHERE ish.HeaderID = 10
+
+--Listing 11-8. Multiple Header Row on Foreign Key Pattern
+Use AdventureWorks2017
+GO
+
+SET STATISTICS IO ON
+
+SELECT ish.HeaderID, ish.FillerData, isd.DetailID, isd.FillerData
+FROM dbo.IndexStrategiesHeader ish
+      INNER JOIN dbo.IndexStrategiesDetail_ICP isd ON ish.HeaderID = isd.HeaderID
+WHERE ish.HeaderID BETWEEN 10 AND 50;
+
+SELECT ish.HeaderID, ish.FillerData, isd.DetailID, isd.FillerData
+FROM dbo.IndexStrategiesHeader ish
+      INNER JOIN dbo.IndexStrategiesDetail_FKP isd ON ish.HeaderID = isd.HeaderID
+WHERE ish.HeaderID BETWEEN 10 AND 50;
+
+--Listing 11-9. Multiple Column Pattern Script
+USE AdventureWorks2017
+GO
+
+CREATE TABLE dbo.Employee (
+EmployeeID int IDENTITY(1,1)
+,EmployeeName varchar(100)
+,FillerData varchar(1000)
+,CONSTRAINT PK_Employee PRIMARY KEY CLUSTERED (EmployeeID));
+
+CREATE INDEX IX_Employee_EmployeeName ON dbo.Employee(EmployeeName);
+
+CREATE TABLE dbo.JobRole (
+JobRoleID int IDENTITY(1,1)
+,RoleName varchar(25)
+,FillerData varchar(200)
+,CONSTRAINT PK_JobRole PRIMARY KEY CLUSTERED (JobRoleID));
+
+CREATE INDEX IX_JobRole_RoleName ON dbo.JobRole(RoleName);
+
+CREATE TABLE dbo.EmployeeJobRole_ICP (
+EmployeeJobRoleID int IDENTITY(1,1)
+,EmployeeID int
+,JobRoleID int
+,CONSTRAINT PK_EmployeeJobRole_ICP PRIMARY KEY CLUSTERED (EmployeeJobRoleID)
+,CONSTRAINT UIX_EmployeeJobRole_ICP UNIQUE (EmployeeID, JobRoleID))
+
+CREATE INDEX IX_EmployeeJobRole_ICP_EmployeeID ON dbo.EmployeeJobRole_ICP(EmployeeID);
+CREATE INDEX IX_EmployeeJobRole_ICP_JobRoleID ON dbo.EmployeeJobRole_ICP(JobRoleID);
+
+CREATE TABLE dbo.EmployeeJobRole_MCP (
+EmployeeJobRoleID int IDENTITY(1,1)
+,EmployeeID int
+,JobRoleID int
+,CONSTRAINT PK_EmployeeJobRoleID PRIMARY KEY NONCLUSTERED (EmployeeJobRoleID)
+,CONSTRAINT CUIX_EmployeeJobRole_ICP UNIQUE CLUSTERED (EmployeeID, JobRoleID));
+
+CREATE INDEX IX_EmployeeJobRole_MCP_JobRoleID ON dbo.EmployeeJobRole_MCP(JobRoleID);
+
+INSERT INTO dbo.Employee (EmployeeName)
+SELECT OBJECT_SCHEMA_NAME(object_id)+'|'+name
+FROM sys.tables;
+
+INSERT INTO dbo.JobRole (RoleName)
+VALUES ('Cook'),('Butcher'),('Candlestick Maker');
+
+INSERT INTO dbo.EmployeeJobRole_ICP (EmployeeID, JobRoleID)
+SELECT EmployeeID, 1 FROM dbo.Employee  
+UNION ALL SELECT EmployeeID, 2 FROM dbo.Employee WHERE EmployeeID / 4 = 1
+UNION ALL SELECT EmployeeID, 3 FROM dbo.Employee WHERE EmployeeID / 8 = 1;
+
+INSERT INTO dbo.EmployeeJobRole_MCP (EmployeeID, JobRoleID)
+SELECT EmployeeID, 1 FROM dbo.Employee  
+UNION ALL SELECT EmployeeID, 2 FROM dbo.Employee WHERE EmployeeID / 4 = 1
+UNION ALL SELECT EmployeeID, 3 FROM dbo.Employee WHERE EmployeeID / 8 = 1;
+
+--Listing 11-10. Script for Multiple Column Pattern 
+USE AdventureWorks2017
+GO
+
+SELECT e.EmployeeName, jr.RoleName
+FROM dbo.Employee e 
+INNER JOIN dbo.EmployeeJobRole_ICP ejr ON e.EmployeeID = ejr.EmployeeID
+INNER JOIN dbo.JobRole jr ON ejr.JobRoleID = jr.JobRoleID
+WHERE RoleName = 'Candlestick Maker'
+
+SELECT e.EmployeeName, jr.RoleName
+FROM dbo.Employee e 
+INNER JOIN dbo.EmployeeJobRole_MCP ejr ON e.EmployeeID = ejr.EmployeeID
+INNER JOIN dbo.JobRole jr ON ejr.JobRoleID = jr.JobRoleID
+WHERE RoleName = 'Candlestick Maker'
+
+--Listing 11-11. Script for Multiple Column Pattern
+USE AdventureWorks2017
+GO
+
+SELECT e.EmployeeName, jr.RoleName
+FROM dbo.Employee e 
+INNER JOIN dbo.EmployeeJobRole_ICP ejr ON e.EmployeeID = ejr.EmployeeID
+INNER JOIN dbo.JobRole jr ON ejr.JobRoleID = jr.JobRoleID
+WHERE EmployeeName = 'Purchasing|ShipMethod'
+
+SELECT e.EmployeeName, jr.RoleName
+FROM dbo.Employee e 
+INNER JOIN dbo.EmployeeJobRole_MCP ejr ON e.EmployeeID = ejr.EmployeeID
+INNER JOIN dbo.JobRole jr ON ejr.JobRoleID = jr.JobRoleID
+WHERE EmployeeName = 'Purchasing|ShipMethod'
+
+--Listing 11-12. Script for GUID Pattern Scenario
+USE AdventureWorks2017
+GO
+
+CREATE TABLE dbo.IndexStrategiesGUID_ICP (
+RowID int IDENTITY(1,1)
+,FillerData varchar(1000)
+,CONSTRAINT PK_IndexStrategiesGUID_ICP PRIMARY KEY CLUSTERED (RowID)
+);
+
+CREATE TABLE dbo.IndexStrategiesGUID_UniqueID (
+RowID uniqueidentifier DEFAULT(NEWSEQUENTIALID())
+,FillerData varchar(1000)
+,CONSTRAINT PK_IndexStrategiesGUID_UniqueID PRIMARY KEY CLUSTERED (RowID)
+);
+
+CREATE TABLE dbo.IndexStrategiesGUID_String (
+RowID varchar(36) DEFAULT(NEWID())
+,FillerData varchar(1000)
+,CONSTRAINT PK_IndexStrategiesGUID_String PRIMARY KEY CLUSTERED (RowID)
+);
+
+INSERT INTO dbo.IndexStrategiesGUID_ICP (FillerData)
+SELECT TOP (250000) a1.name+a2.name
+FROM sys.all_objects a1 CROSS JOIN sys.all_objects a2
+
+INSERT INTO dbo.IndexStrategiesGUID_UniqueID (FillerData)
+SELECT TOP (250000) a1.name+a2.name
+FROM sys.all_objects a1 CROSS JOIN sys.all_objects a2
+
+INSERT INTO dbo.IndexStrategiesGUID_String (FillerData)
+SELECT TOP (250000) a1.name+a2.name
+FROM sys.all_objects a1 CROSS JOIN sys.all_objects a2
+
+SELECT OBJECT_NAME(object_ID) as table_name, in_row_used_page_count, in_row_reserved_page_count
+FROM sys.dm_db_partition_stats
+WHERE object_id IN (OBJECT_ID('dbo.IndexStrategiesGUID_ICP')
+        ,OBJECT_ID('dbo.IndexStrategiesGUID_UniqueID')
+        ,OBJECT_ID('dbo.IndexStrategiesGUID_String'))
+ORDER BY 1
+
+--Listing 11-13. Setup for Search Columns Pattern
+USE AdventureWorks2017;
+GO
+
+CREATE TABLE dbo.Contacts (
+    ContactID INT IDENTITY(1, 1),
+    FirstName NVARCHAR(50),
+    LastName NVARCHAR(50),
+    IsActive BIT,
+    EmailAddress NVARCHAR(50),
+    CertificationDate DATETIME,
+    FillerData CHAR(1000),
+    CONSTRAINT PK_Contacts PRIMARY KEY CLUSTERED (ContactID));
+
+INSERT INTO dbo.Contacts (
+    FirstName,
+    LastName,
+    IsActive,
+    EmailAddress,
+    CertificationDate )
+SELECT pp.FirstName,
+       pp.LastName,
+       IIF(pp.BusinessEntityID / 10 = 1, 1, 0),
+       pea.EmailAddress,
+       IIF(pp.BusinessEntityID / 10 = 1, pp.ModifiedDate, NULL)
+FROM Person.Person pp
+    INNER JOIN Person.EmailAddress pea
+        ON pp.BusinessEntityID = pea.BusinessEntityID;
+
+--Listing 11-14. Search Columns Pattern
+USE AdventureWorks2017;
+GO
+
+SET STATISTICS IO ON;
+
+SELECT ContactID,
+       FirstName
+FROM dbo.Contacts
+WHERE FirstName = 'Catherine';
+
+--USE AdventureWorks2017;
+GO
+
+CREATE INDEX IX_Contacts_FirstName ON dbo.Contacts (FirstName);
+
+SET STATISTICS IO ON;
+
+SELECT ContactID,
+       FirstName
+FROM dbo.Contacts
+WHERE FirstName = 'Catherine';
+
+--Listing 11-16. Index Intersection Pattern
+USE AdventureWorks2017;
+GO
+
+SET STATISTICS IO ON;
+
+SELECT ContactID,
+       FirstName,
+       LastName
+FROM dbo.Contacts
+WHERE FirstName = 'Catherine'
+      AND LastName = 'Cox';
+
+--Listing 11-17. Index Intersection Pattern
+USE AdventureWorks2017;
+GO
+
+CREATE INDEX IX_Contacts_LastName ON dbo.Contacts (LastName);
+
+SET STATISTICS IO ON;
+
+SELECT ContactID,
+       FirstName,
+       LastName
+FROM dbo.Contacts
+WHERE FirstName = 'Catherine'
+      AND LastName = 'Cox';
+
+--Listing 11-18. Multiple Column Pattern
+USE AdventureWorks2017;
+GO
+
+CREATE INDEX IX_Contacts_FirstNameLastName 
+  ON dbo.Contacts (FirstName, LastName);
+
+SET STATISTICS IO ON;
+
+SELECT ContactID,
+       FirstName,
+       LastName
+FROM dbo.Contacts
+WHERE FirstName = 'Catherine'
+      AND LastName = 'Cox';
+
+--Listing 11-19. Covering Index Pattern
+USE AdventureWorks2017;
+GO
+
+SET STATISTICS IO ON;
+
+SELECT ContactID,
+       FirstName,
+       LastName,
+       IsActive
+FROM dbo.Contacts
+WHERE FirstName = 'Catherine'
+      AND LastName = 'Cox';
+
+--Listing 11-20. Covering Index Pattern
+USE AdventureWorks2017
+GO
+
+CREATE INDEX IX_Contacts_FirstNameLastNameIsActive ON dbo.Contacts(FirstName, LastName, 
+IsActive);
+
+SET STATISTICS IO ON;
+
+SELECT ContactID,
+       FirstName,
+       LastName,
+       IsActive
+FROM dbo.Contacts
+WHERE FirstName = 'Catherine'
+      AND LastName = 'Cox'; 
+
+--Listing 11-21. Included Columns Pattern
+USE AdventureWorks2017;
+GO
+
+SET STATISTICS IO ON;
+
+SELECT ContactID,
+       FirstName,
+       LastName,
+       EmailAddress
+FROM dbo.Contacts
+WHERE FirstName = 'Catherine';
+
+--Listing 11-22. Included Columns Pattern
+USE AdventureWorks2017
+GO
+
+CREATE INDEX IX_Contacts_FirstNameINC ON dbo.Contacts(FirstName)
+       INCLUDE (LastName, IsActive, EmailAddress);
+
+SET STATISTICS IO ON;
+
+SELECT ContactID,
+       FirstName,
+       LastName,
+       EmailAddress
+FROM dbo.Contacts
+WHERE FirstName = 'Catherine'; 
+
+--Listing 11-23. Dropping Indexes in Included Columns Pattern
+USE AdventureWorks2017
+GO
+
+DROP INDEX IF EXISTS IX_Contacts_FirstNameLastName ON dbo.Contacts
+GO
+
+DROP INDEX IF EXISTS IX_Contacts_FirstNameLastNameIsActive ON dbo.Contacts
+GO
+
+DROP INDEX IF EXISTS IX_Contacts_FirstName ON dbo.Contacts
+GO
+
+--Listing 11-24. Other Queries Against Included Columns Pattern
+USE AdventureWorks2017;
+GO
+
+SET STATISTICS IO ON;
+
+SELECT ContactID,
+       FirstName
+FROM dbo.Contacts
+WHERE FirstName = 'Catherine';
+
+SELECT ContactID,
+       FirstName,
+       LastName
+FROM dbo.Contacts
+WHERE FirstName = 'Catherine'
+      AND LastName = 'Cox';
+
+SELECT ContactID,
+       FirstName,
+       LastName,
+       IsActive
+FROM dbo.Contacts
+WHERE FirstName = 'Catherine'
+      AND LastName = 'Cox';
+
+--Listing 11-25. Filtered Indexes Pattern
+USE AdventureWorks2017;
+GO
+
+SET STATISTICS IO ON;
+
+SELECT ContactID,
+       FirstName,
+       LastName,
+       CertificationDate
+FROM dbo.Contacts
+WHERE CertificationDate IS NOT NULL
+ORDER BY CertificationDate;
+
+SELECT ContactID,
+       FirstName,
+       LastName,
+       CertificationDate
+FROM dbo.Contacts
+WHERE CertificationDate
+BETWEEN '20110101' AND '20110201'
+ORDER BY CertificationDate;
+
+--Listing 11-26. Filtered Index Pattern
+USE AdventureWorks2017
+GO
+
+CREATE INDEX IX_Contacts_CertificationDate ON dbo.Contacts(CertificationDate)
+      INCLUDE (FirstName, LastName)
+      WHERE CertificationDate IS NOT NULL;
+
+SET STATISTICS IO ON;
+
+SELECT ContactID,
+       FirstName,
+       LastName,
+       CertificationDate
+FROM dbo.Contacts
+WHERE CertificationDate IS NOT NULL
+ORDER BY CertificationDate;
+
+SELECT ContactID,
+       FirstName,
+       LastName,
+       CertificationDate
+FROM dbo.Contacts
+WHERE CertificationDate
+BETWEEN '20110101' AND '20110201'
+ORDER BY CertificationDate;
+
+SET STATISTICS IO OFF;
+
+SELECT OBJECT_NAME(object_id) as table_name
+      ,CASE index_id
+      WHEN INDEXPROPERTY(object_id , 'IX_Contacts_CertificationDate', 'IndexID') THEN 'Filtered Index'
+    WHEN 1 THEN 'Clustered Index'
+    ELSE 'Other Indexes' END As index_type
+    ,index_id
+    ,in_row_data_page_count
+    ,in_row_reserved_page_count
+    ,in_row_used_page_count
+FROM sys.dm_db_partition_stats
+WHERE object_id = OBJECT_ID('dbo.Contacts');
+
+--Listing 11-27. Setup for Foreign Keys Pattern
+USE AdventureWorks2017
+GO
+
+CREATE TABLE dbo.Customer(
+        CustomerID int
+        ,FillterData char(1000)
+        ,CONSTRAINT PK_Customer_CustomerID PRIMARY KEY CLUSTERED (CustomerID)
+        );
+
+CREATE TABLE dbo.SalesOrderHeader(
+        SalesOrderID int
+        ,OrderDate datetime 
+        ,DueDate datetime 
+        ,CustomerID int 
+        ,FillterData char(1000)
+        ,CONSTRAINT PK_SalesOrderHeader_SalesOrderID 
+           PRIMARY KEY CLUSTERED (SalesOrderID)
+        ,CONSTRAINT GK_SalesOrderHeader_CustomerID_FROM_Customer 
+           FOREIGN KEY (CustomerID) REFERENCES dbo.Customer(CustomerID)
+        );
+
+INSERT INTO dbo.Customer (CustomerID)
+SELECT CustomerID
+FROM Sales.Customer;
+
+INSERT INTO dbo.SalesOrderHeader 
+  (SalesOrderID, OrderDate, DueDate, CustomerID)
+SELECT SalesOrderID, OrderDate, DueDate, CustomerID
+FROM Sales.SalesOrderHeader;
+
+--Listing 11-28. Foreign Key Pattern
+USE AdventureWorks2017
+GO
+
+SELECT MAX(c.CustomerID)
+      FROM dbo.Customer c
+      LEFT OUTER JOIN dbo.SalesOrderHeader soh ON c.CustomerID = soh.CustomerID
+      WHERE soh.CustomerID IS NULL;
+
+SET STATISTICS IO ON;
+
+DELETE FROM dbo.Customer
+WHERE CustomerID = 701;
+
+--Listing 11-29. Foreign Keys Pattern
+USE AdventureWorks2017
+GO
+
+CREATE INDEX IX_SalesOrderHeader_CustomerID ON dbo.SalesOrderHeader(CustomerID);
+
+SELECT MAX(c.CustomerID)
+      FROM dbo.Customer c
+      LEFT OUTER JOIN dbo.SalesOrderHeader soh ON c.CustomerID = soh.CustomerID
+      WHERE soh.CustomerID IS NULL;
+
+SET STATISTICS IO ON
+
+DELETE FROM dbo.Customer
+WHERE CustomerID = 700
+
+--Listing 11-30. Columnstore Index
+USE ContosoRetailDW
+GO
+
+SET STATISTICS IO ON
+SET STATISTICS TIME ON
+
+SELECT dd.CalendarQuarter
+      ,dpc.ProductCategoryName
+      ,COUNT(*) As TotalRows
+      ,SUM(SalesQuantity) AS TotalSales
+FROM dbo.FactSales fs
+      INNER JOIN dbo.DimDate dd ON fs.DateKey = dd.Datekey
+      INNER JOIN dbo.DimProduct dp ON fs.ProductKey = dp.ProductKey
+      INNER JOIN dbo.DimProductSubcategory dps ON dp.ProductSubcategoryKey = dps.
+ProductSubcategoryKey
+      INNER JOIN dbo.DimProductCategory dpc ON dps.ProductCategoryKey = dpc.ProductCategoryKey
+GROUP BY dd.CalendarQuarter
+      ,dpc.ProductCategoryName;
+
+--Listing 11-31. Adding Nonclustered Columnstore Index
+USE ContosoRetailDW
+GO
+
+CREATE NONCLUSTERED COLUMNSTORE INDEX IX_FactSales_CStore ON dbo.FactSales (
+   SalesKey, DateKey, channelKey, StoreKey, ProductKey, PromotionKey, CurrencyKey, UnitCost, UnitPrice,
+   SalesQuantity, ReturnQuantity, ReturnAmount, DiscountQuantity, DiscountAmount, TotalCost, SalesAmount,
+   ETLLoadID, LoadDate, UpdateDate);
+
+SET STATISTICS IO ON;
+SET STATISTICS TIME ON;
+
+SELECT dd.CalendarQuarter
+      ,dpc.ProductCategoryName
+      , COUNT(*) As TotalRows
+      ,SUM(SalesQuantity) AS TotalSales
+FROM dbo.FactSales fs
+      INNER JOIN dbo.DimDate dd ON fs.DateKey = dd.Datekey
+      INNER JOIN dbo.DimProduct dp ON fs.ProductKey = dp.ProductKey
+      INNER JOIN dbo.DimProductSubcategory dps ON dp.ProductSubcategoryKey = dps.
+ProductSubcategoryKey
+    INNER JOIN dbo.DimProductCategory dpc ON dps.ProductCategoryKey = dpc.ProductCategoryKey
+GROUP BY dd.CalendarQuarter
+      ,dpc.ProductCategoryName;
+
+--Listing 11-32. Create Fact Table with Clustered Columnstore Index
+USE ContosoRetailDW
+GO
+
+IF OBJECT_ID('dbo.FactSales_CCI') IS NOT NULL
+    DROP TABLE FactSales_CCI
+
+CREATE TABLE dbo.FactSales_CCI(
+    SalesKey int NOT NULL,
+    DateKey datetime NOT NULL,
+    channelKey int NOT NULL,
+    StoreKey int NOT NULL,
+    ProductKey int NOT NULL,
+    PromotionKey int NOT NULL,
+    CurrencyKey int NOT NULL,
+    UnitCost money NOT NULL,
+    UnitPrice money NOT NULL,
+    SalesQuantity int NOT NULL,
+    ReturnQuantity int NOT NULL,
+    ReturnAmount money NULL,
+    DiscountQuantity int NULL,
+    DiscountAmount money NULL,
+    TotalCost money NOT NULL,
+    SalesAmount money NOT NULL,
+    ETLLoadID int NULL,
+    LoadDate datetime NULL,
+    UpdateDate datetime NULL
+    )
+
+INSERT INTO dbo.FactSales_CCI
+SELECT * FROM dbo.FactSales
+
+CREATE CLUSTERED COLUMNSTORE INDEX FactSales_CStore ON dbo.FactSales_CCI 
+
+SET STATISTICS IO ON;
+SET STATISTICS TIME ON;
+
+SELECT dd.CalendarQuarter
+      ,dpc.ProductCategoryName
+      , COUNT(*) As TotalRows
+      ,SUM(SalesQuantity) AS TotalSales
+FROM dbo.FactSales_CCI fs
+      INNER JOIN dbo.DimDate dd ON fs.DateKey = dd.Datekey
+      INNER JOIN dbo.DimProduct dp ON fs.ProductKey = dp.ProductKey
+      INNER JOIN dbo.DimProductSubcategory dps ON dp.ProductSubcategoryKey = dps.
+ProductSubcategoryKey
+    INNER JOIN dbo.DimProductCategory dpc ON dps.ProductCategoryKey = dpc.ProductCategoryKey
+GROUP BY dd.CalendarQuarter
+      ,dpc.ProductCategoryName;
+
+--Listing 11-33. XML Example
+<CustomFields>
+  <OtherLanguages>
+    <Language>Polish</Language>
+    <Language>Chines</Language>
+    <Language>Japanese</Language>
+  </OtherLanguages>
+  <HireDate>2008-04-19T00:00:00</HireDate>
+  <Title>Team Member</Title>
+  <PrimarySalesTerritory>Plains</PrimarySalesTerritory>
+  <CommissionRate>0.98</CommissionRate>
+</CustomFields>
+
+--Listing 11-34. JSON Example
+{
+"OtherLanguages": ["Polish","Chinese","Japanese"] ,
+"HireDate":"2008-04-19T00:00:00",
+"Title":"Team Member",
+"PrimarySalesTerritory":"Plains",
+"CommissionRate":"0.98"
+}
+
+--Listing 11-35. JSON Example Setup
+USE WideWorldImporters;
+GO
+
+DROP TABLE IF EXISTS dbo.People;
+
+CREATE TABLE [dbo].[People]
+(
+    [PersonID] [INT] NOT NULL,
+    [FullName] [NVARCHAR](50) NOT NULL,
+    [CustomFields] [NVARCHAR](MAX) NULL,
+    [HireDate] AS JSON_VALUE([CustomFields], N'$.HireDate'),
+    [Junk] [VARCHAR](4000) NULL,
+    CONSTRAINT [PK_People]
+        PRIMARY KEY CLUSTERED ([PersonID])
+);
+GO
+INSERT INTO dbo.People
+(
+    PersonID,
+    FullName,
+    CustomFields,
+    Junk
+)
+SELECT PersonID,
+       FullName,
+       CustomFields,
+       REPLICATE('x', 4000) AS Junk
+FROM Application.People;
+GO
+
+--Listing 11-36. Query computed JSON column
+USE WideWorldImporters;
+GO
+
+SET STATISTICS IO ON;
+
+SELECT PersonID,
+HireDate 
+FROM dbo.People
+WHERE HireDate IS NOT NULL;
+
+--Listing 11-37. Index and query JSON computed column 
+USE WideWorldImporters;
+GO
+
+CREATE INDEX IX_People_HireDate ON dbo.People (HireDate);
+GO
+
+SET STATISTICS IO ON;
+
+SELECT PersonID,
+       HireDate
+FROM dbo.People
+WHERE HireDate IS NOT NULL
+
+--Listing 11-38. Setup for Row Compression
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.NoCompression') IS NOT NULL
+    DROP TABLE dbo.NoCompression;
+
+IF OBJECT_ID('dbo.RowCompression') IS NOT NULL
+    DROP TABLE dbo.RowCompression;
+
+SELECT SalesOrderID
+   ,SalesOrderDetailID
+   ,CarrierTrackingNumber
+   ,OrderQty
+   ,ProductID
+   ,SpecialOfferID
+   ,UnitPrice
+   ,UnitPriceDiscount
+   ,LineTotal
+   ,rowguid
+   ,ModifiedDate
+INTO dbo.NoCompression
+FROM Sales.SalesOrderDetail;
+
+SELECT SalesOrderID
+   ,SalesOrderDetailID
+   ,CarrierTrackingNumber
+   ,OrderQty
+   ,ProductID
+   ,SpecialOfferID
+   ,UnitPrice
+   ,UnitPriceDiscount
+   ,LineTotal
+   ,rowguid
+   ,ModifiedDate
+INTO dbo.RowCompression
+FROM Sales.SalesOrderDetail;
+
+--Listing 11-39. Implementing Row Compression
+USE AdventureWorks2017
+GO
+
+CREATE CLUSTERED INDEX CLIX_NoCompression ON dbo.NoCompression
+     (SalesOrderID, SalesOrderDetailID);
+
+CREATE CLUSTERED INDEX CLIX_RowCompression ON dbo.RowCompression
+     (SalesOrderID, SalesOrderDetailID)
+    WITH (DATA_COMPRESSION = ROW);
+
+SELECT OBJECT_NAME(object_id) AS table_name
+    ,in_row_reserved_page_count
+FROM sys.dm_db_partition_stats
+WHERE object_id IN (OBJECT_ID('dbo.NoCompression'),OBJECT_ID('dbo.RowCompression'));
+
+--Listing 11-40. Row Compression Query
+USE AdventureWorks2017
+GO
+
+SET STATISTICS IO, TIME ON
+
+SELECT SalesOrderID, SalesOrderDetailID, CarrierTrackingNumber
+FROM dbo.NoCompression
+WHERE SalesOrderID BETWEEN 51500 AND 52000;
+
+SELECT SalesOrderID, SalesOrderDetailID, CarrierTrackingNumber
+FROM dbo.RowCompression
+WHERE SalesOrderID BETWEEN 51500 AND 52000;
+
+--Listing 11-41. Setup for Page Compression
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.PageCompression') IS NOT NULL
+    DROP TABLE dbo.PageCompression;
+
+SELECT SalesOrderID
+   ,SalesOrderDetailID
+   ,CarrierTrackingNumber
+   ,OrderQty
+   ,ProductID
+   ,SpecialOfferID
+   ,UnitPrice
+   ,UnitPriceDiscount
+   ,LineTotal
+   ,rowguid
+   ,ModifiedDate
+INTO dbo.PageCompression
+FROM Sales.SalesOrderDetail;
+
+--Listing 11-42. Implementing Page Compression
+USE AdventureWorks2017
+GO
+
+CREATE CLUSTERED INDEX CLIX_PageCompression ON dbo.PageCompression
+    (SalesOrderID, SalesOrderDetailID)
+    WITH (DATA_COMPRESSION = PAGE);
+
+SELECT OBJECT_NAME(object_id) AS table_name
+    ,in_row_reserved_page_count
+FROM sys.dm_db_partition_stats
+WHERE object_id IN (OBJECT_ID('dbo.NoCompression'),OBJECT_ID('dbo.PageCompression'));
+
+--USE AdventureWorks2017
+GO
+
+SET STATISTICS IO, TIME ON
+
+SELECT SalesOrderID, SalesOrderDetailID, CarrierTrackingNumber
+FROM dbo.PageCompression
+WHERE SalesOrderID BETWEEN 51500 AND 52000;
+
+--Listing 11-44. Expensive Aggregation Query
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.ProductSubcategorySummary') IS NOT NULL
+    DROP VIEW dbo.ProductSubcategorySummary;
+
+SET STATISTICS IO ON;
+
+SELECT psc.Name
+    ,SUM(sod.LineTotal) AS SumLineTotal
+    ,SUM(sod.OrderQty) AS SumOrderQty
+    ,AVG(sod.UnitPrice) AS AvgUnitPrice
+FROM Sales.SalesOrderDetail sod
+    INNER JOIN Production.Product p ON sod.ProductID = p.ProductID
+    INNER JOIN Production.ProductSubcategory psc ON p.ProductSubcategoryID = psc.ProductSubcategoryID
+GROUP BY psc.Name
+ORDER BY psc.Name;
+
+--Listing 11-45. Indexed View
+USE AdventureWorks2017
+GO
+
+CREATE VIEW dbo.ProductSubcategorySummary
+WITH SCHEMABINDING
+AS
+SELECT psc.Name
+    ,SUM(sod.LineTotal) AS SumLineTotal
+    ,SUM(sod.OrderQty) AS SumOrderQty
+    ,SUM(sod.UnitPrice) AS TotalUnitPrice
+    ,COUNT_BIG(*) AS Occurrences
+FROM Sales.SalesOrderDetail sod
+    INNER JOIN Production.Product p ON sod.ProductID = p.ProductID
+    INNER JOIN Production.ProductSubcategory psc ON p.ProductSubcategoryID = psc.ProductSubcategoryID
+GROUP BY psc.Name;
+GO
+
+CREATE UNIQUE CLUSTERED INDEX CLIX_ProductSubcategorySummary 
+     ON dbo.ProductSubcategorySummary(Name)
+
+
+--Listing 11-46. Indexed View
+USE AdventureWorks2017;
+GO
+
+SET STATISTICS IO ON;
+
+SELECT psc.Name,
+       SUM(sod.LineTotal) AS SumLineTotal,
+       SUM(sod.OrderQty) AS SumOrderQty,
+       AVG(sod.UnitPrice) AS AvgUnitPrice
+FROM Sales.SalesOrderDetail sod
+    INNER JOIN Production.Product p
+        ON sod.ProductID = p.ProductID
+    INNER JOIN Production.ProductSubcategory psc
+        ON p.ProductSubcategoryID = psc.ProductSubcategoryID
+GROUP BY psc.Name
+ORDER BY psc.Name;
+
+SELECT Name,
+       SumLineTotal,
+       SumOrderQty,
+       TotalUnitPrice / Occurrences AS AvgUnitPrice
+FROM dbo.ProductSubcategorySummary
+ORDER BY Name;

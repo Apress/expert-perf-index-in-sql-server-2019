@@ -1,0 +1,257 @@
+--Listing 6-1. Preparing Database for Memory-Optimized Tables 
+USE master
+GO
+
+IF EXISTS(SELECT * FROM sys.databases WHERE name = 'MemOptIndexing')
+DROP DATABASE MemOptIndexing
+GO
+
+CREATE DATABASE MemOptIndexing 
+GO
+
+ALTER DATABASE MemOptIndexing 
+ADD FILEGROUP memoryOptimizedFG CONTAINS MEMORY_OPTIMIZED_DATA
+
+--This file location may change in your environment
+ALTER DATABASE MemOptIndexing 
+ADD FILE (name='memoryOptimizedData'
+,filename= ‘C:\Program Files\Microsoft SQL Server\MSSQL15.MSSQLSERVER\MSSQL\DATA\memoryOptimizedData') 
+      TO FILEGROUP memoryOptimizedFG
+
+ALTER DATABASE MemOptIndexing SET MEMORY_OPTIMIZED_ELEVATE_TO_SNAPSHOT=ON
+GO
+
+--Listing 6-2. Create Memory-Optimized Table
+USE MemOptIndexing
+GO
+IF OBJECT_ID('dbo.SalesOrderHeader') IS NOT NULL
+    DROP TABLE dbo.SalesOrderHeader
+
+CREATE TABLE dbo.SalesOrderHeader(
+    SalesOrderID int NOT NULL,
+    OrderDate datetime,
+    DueDate datetime,
+    ShipDate datetime,
+    [Status] tinyint,
+    CONSTRAINT IX_SalesOrderHeader_Hash PRIMARY KEY 
+        NONCLUSTERED HASH (SalesOrderID) 
+        WITH (BUCKET_COUNT = 35000)) 
+    WITH (MEMORY_OPTIMIZED = ON)
+
+IF  OBJECT_ID('tempdb..#tempHeader') IS NOT NULL
+    DROP TABLE #tempHeader
+
+SELECT SalesOrderID
+    ,OrderDate
+    ,DueDate
+    ,ShipDate
+    ,[Status] 
+INTO #tempHeader
+FROM AdventureWorks2017.sales.SalesOrderHeader
+
+INSERT INTO dbo.SalesOrderHeader
+SELECT SalesOrderID
+    ,OrderDate
+    ,DueDate
+    ,ShipDate
+    ,[Status] 
+FROM #tempHeader
+
+SET STATISTICS IO ON
+SET STATISTICS TIME ON
+PRINT 'Memory Optimized Table'
+SELECT * 
+FROM dbo.SalesOrderHeader
+ORDER BY SalesOrderID
+
+
+PRINT 'Traditional Table'
+SELECT *
+FROM AdventureWorks2017.sales.SalesOrderHeader
+ORDER BY SalesOrderID
+
+SET STATISTICS IO OFF
+SET STATISTICS TIME OFF
+
+--Listing 6-4. Create Memory-Optimzed Tables with Hash Indexes
+USE MemOptIndexing
+GO
+
+IF OBJECT_ID('dbo.SalesOrderHeader_low') IS NOT NULL
+    DROP TABLE dbo.SalesOrderHeader_low
+
+CREATE TABLE dbo.SalesOrderHeader_low(
+    SalesOrderID int NOT NULL
+    ,Column1 uniqueidentifier
+    ,CONSTRAINT IX_SalesOrderHeader_Hash_low PRIMARY KEY 
+        NONCLUSTERED HASH (SalesOrderID) 
+        WITH (BUCKET_COUNT = 1000)) 
+    WITH (MEMORY_OPTIMIZED = ON);
+
+WITH L1(z) AS (SELECT 0 UNION ALL SELECT 0)
+, L2(z) AS (SELECT 0 FROM L1 a CROSS JOIN L1 b)
+, L3(z) AS (SELECT 0 FROM L2 a CROSS JOIN L2 b)
+, L4(z) AS (SELECT 0 FROM L3 a CROSS JOIN L3 b)
+, L5(z) AS (SELECT 0 FROM L4 a CROSS JOIN L4 b)
+, L6(z) AS (SELECT TOP 1000000 0 FROM L5 a CROSS JOIN L5 b)
+INSERT INTO dbo.SalesOrderHeader_low
+SELECT ROW_NUMBER() OVER (ORDER BY z) AS RowID, NEWID()
+FROM L6;
+GO
+
+IF OBJECT_ID('dbo.SalesOrderHeader_high') IS NOT NULL
+    DROP TABLE dbo.SalesOrderHeader_high
+
+CREATE TABLE dbo.SalesOrderHeader_high(
+    SalesOrderID int NOT NULL
+    ,Column1 uniqueidentifier
+    ,CONSTRAINT IX_SalesOrderHeader_hash_high PRIMARY KEY 
+        NONCLUSTERED HASH (SalesOrderID) 
+        WITH (BUCKET_COUNT = 1000000)) 
+    WITH (MEMORY_OPTIMIZED = ON);
+
+WITH L1(z) AS (SELECT 0 UNION ALL SELECT 0)
+, L2(z) AS (SELECT 0 FROM L1 a CROSS JOIN L1 b)
+, L3(z) AS (SELECT 0 FROM L2 a CROSS JOIN L2 b)
+, L4(z) AS (SELECT 0 FROM L3 a CROSS JOIN L3 b)
+, L5(z) AS (SELECT 0 FROM L4 a CROSS JOIN L4 b)
+, L6(z) AS (SELECT TOP 1000000 0 FROM L5 a CROSS JOIN L5 b)
+INSERT INTO dbo.SalesOrderHeader_high
+SELECT ROW_NUMBER() OVER (ORDER BY z) AS RowID, NEWID()
+FROM L6;
+
+--Listing 6-5. Query Memory-Optimzed Tables with Hash Indexes
+USE MemOptIndexing
+GO
+
+SET STATISTICS TIME ON
+
+PRINT 'Memory Optimized Table with 1000 buckets'
+SELECT * 
+FROM dbo.SalesOrderHeader_low
+WHERE SalesOrderID = 42
+ORDER BY SalesOrderID
+
+PRINT 'Memory Optimized Table with 1,000,000 buckets'
+SELECT * 
+FROM dbo.SalesOrderHeader_high
+WHERE SalesOrderID = 42
+ORDER BY SalesOrderID
+
+SET STATISTICS TIME OFF
+
+--Listing 6-6. Query Memory-Optimzed Tables with Hash Indexes
+USE MemOptIndexing
+GO
+
+SET STATISTICS TIME ON
+
+PRINT 'Memory Optimized Table with 1000 buckets'
+SELECT * 
+FROM dbo.SalesOrderHeader_low
+WHERE SalesOrderID BETWEEN 42 AND 420
+ORDER BY SalesOrderID
+
+PRINT 'Memory Optimized Table with 1,000,000 buckets'
+SELECT * 
+FROM dbo.SalesOrderHeader_high
+WHERE SalesOrderID BETWEEN 42 AND 420
+ORDER BY SalesOrderID
+
+SET STATISTICS TIME OFF
+
+--Listing 6-6. Query Memory-Optimzed Tables with Hash Indexes
+USE MemOptIndexing
+GO
+
+SET STATISTICS TIME ON
+
+PRINT 'Memory Optimized Table with 1000 buckets'
+SELECT * 
+FROM dbo.SalesOrderHeader_low
+WHERE SalesOrderID BETWEEN 42 AND 420
+ORDER BY SalesOrderID
+
+PRINT 'Memory Optimized Table with 1,000,000 buckets'
+SELECT * 
+FROM dbo.SalesOrderHeader_high
+WHERE SalesOrderID BETWEEN 42 AND 420
+ORDER BY SalesOrderID
+
+SET STATISTICS TIME OFF
+
+--Listing 6-7. Query to Review Hash Index Statistics
+USE MemOptIndexing
+GO
+
+SELECT OBJECT_NAME(hs.object_id) AS object_name
+,i.name as index_name
+,hs.total_bucket_count
+,hs.empty_bucket_count
+,FLOOR((CAST(empty_bucket_count as float)/total_bucket_count) * 100) AS empty_bucket_percent
+,hs.avg_chain_length
+,hs.max_chain_length
+FROM sys.dm_db_xtp_hash_index_stats AS hs 
+INNER JOIN sys.indexes AS i ON hs.object_id=i.object_id AND hs.index_id=i.index_id
+
+--Listing 6-7. Create Table with Range Index
+USE MemOptIndexing
+GO
+
+IF OBJECT_ID('dbo.SalesOrderHeader_high_range') IS NOT NULL
+    DROP TABLE dbo.SalesOrderHeader_high_range
+
+CREATE TABLE dbo.SalesOrderHeader_high_range(
+    SalesOrderID int NOT NULL
+    ,Column1 uniqueidentifier
+    ,CONSTRAINT IX_SalesOrderHeader_hash_high_range PRIMARY KEY 
+        NONCLUSTERED HASH (SalesOrderID) 
+        WITH (BUCKET_COUNT = 1000000)
+    ,INDEX IX_SalesOrderHeader NONCLUSTERED (SalesOrderID)
+    ) 
+    WITH (MEMORY_OPTIMIZED = ON);
+
+WITH L1(z) AS (SELECT 0 UNION ALL SELECT 0)
+, L2(z) AS (SELECT 0 FROM L1 a CROSS JOIN L1 b)
+, L3(z) AS (SELECT 0 FROM L2 a CROSS JOIN L2 b)
+, L4(z) AS (SELECT 0 FROM L3 a CROSS JOIN L3 b)
+, L5(z) AS (SELECT 0 FROM L4 a CROSS JOIN L4 b)
+, L6(z) AS (SELECT TOP 1000000 0 FROM L5 a CROSS JOIN L5 b)
+INSERT INTO dbo.SalesOrderHeader_high_range
+SELECT ROW_NUMBER() OVER (ORDER BY z) AS RowID, NEWID()
+FROM L6;
+
+--Listing 6-8. Query Memory-Optimzed Tables with Range Scan
+USE MemOptIndexing
+GO
+
+SET STATISTICS TIME ON
+
+SELECT * 
+FROM dbo.SalesOrderHeader_high
+WHERE SalesOrderID BETWEEN 100 AND 10000
+ORDER BY SalesOrderID
+
+SELECT * 
+FROM dbo.SalesOrderHeader_high_range
+WHERE SalesOrderID BETWEEN 100 AND 10000
+ORDER BY SalesOrderID
+
+SET STATISTICS TIME OFF
+
+--Listing 6-9. Query Memory-Optimzed Tables with ORDER BY Statement
+USE MemOptIndexing
+GO
+
+SET STATISTICS TIME ON
+
+SELECT TOP 100 *
+FROM dbo.SalesOrderHeader_high
+ORDER BY SalesOrderID
+
+SELECT TOP 100 *
+FROM dbo.SalesOrderHeader_high_range
+ORDER BY SalesOrderID
+
+SET STATISTICS TIME OFF
+

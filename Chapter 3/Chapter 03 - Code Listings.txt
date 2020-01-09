@@ -1,0 +1,656 @@
+--Listing 3-1. DBCC SHOW_STATISTICS Syntax
+DBCC SHOW_STATISTICS ( table_or_indexed_view_name , target ) 
+[ WITH [ < options > ]    
+
+--Listing 3-2. DBCC SHOW_STATISTICS for Index on Sales.SalesOrderDetail Table
+USE AdventureWorks2017
+GO
+
+DBCC SHOW_STATISTICS ( 'Sales.SalesOrderDetail'
+, PK_SalesOrderDetail_SalesOrderID_SalesOrderDetailID )
+
+--Listing 3-3. Query to Check AVG_RANGE_ROWS Estimate
+USE AdventureWorks2017
+GO
+
+SELECT (COUNT(*)*1.)/COUNT(DISTINCT SalesOrderID) AS AverageRows
+FROM Sales.SalesOrderDetail 
+WHERE SalesOrderID BETWEEN 43672 AND 43677;
+    
+SELECT (COUNT(*)*1.)/COUNT(DISTINCT SalesOrderID) AS AverageRows
+FROM Sales.SalesOrderDetail 
+WHERE SalesOrderID BETWEEN 43675 AND 43677;
+
+SELECT (COUNT(*)*1.)/COUNT(DISTINCT SalesOrderID) AS AverageRows
+FROM Sales.SalesOrderDetail 
+WHERE SalesOrderID BETWEEN 43675 AND 43680;
+
+--Listing 3-4. STATS_DATE Syntax
+STATS_DATE ( object_id , stats_id )
+
+--Listing 3-5. Syntax for sys.dm_db_stats_properties 
+sys.dm_db_stats_properties (object_id, stats_id)
+
+--Listing 3-6. Prepare Tables for sys.dm_db_stats_properties Review
+USE AdventureWorks2017
+GO
+
+DROP TABLE IF EXISTS dbo.SalesOrderHeaderStats;
+
+SELECT SalesOrderID
+,OrderDate
+,SalesOrderNumber
+INTO dbo.SalesOrderHeaderStats
+FROM Sales.SalesOrderHeader
+WHERE SalesOrderID <= 63658
+
+CREATE CLUSTERED INDEX CIX_SalesOrderHeaderStats 
+    ON dbo.SalesOrderHeaderStats(SalesOrderID)
+CREATE INDEX CIX_SalesOrderHeaderStats_OrderDate 
+    ON dbo.SalesOrderHeaderStats(OrderDate)
+CREATE INDEX CIX_SalesOrderHeaderStats_SalesOrderNumber 
+    ON dbo.SalesOrderHeaderStats(SalesOrderNumber)
+
+--Listing 3-7. sys.dm_db_stats_properties Query for dbo.SalesOrderHeaderStats
+USE AdventureWorks2017
+GO
+
+SELECT 
+    OBJECT_SCHEMA_NAME(s.object_id)
+    +'.'+OBJECT_NAME(s.object_id) AS object_name
+    ,s.name as statistics_name
+    ,x.last_updated
+    ,x.rows
+    ,x.rows_sampled
+    ,x.steps
+    ,x.unfiltered_rows
+    ,x.modification_counter
+FROM sys.stats s
+    CROSS APPLY sys.dm_db_stats_properties(s.object_id, s.stats_id) x
+WHERE s.object_id = OBJECT_ID('dbo.SalesOrderHeaderStats')
+
+--Listing 3-8. Sample DML Queries dbo.SalesOrderHeaderStats
+USE AdventureWorks2017
+GO
+
+UPDATE dbo.SalesOrderHeaderStats
+set OrderDate = GETDATE()
+WHERE SalesOrderID % 500 = 1
+
+--execute code in Listing 3-7
+
+UPDATE dbo.SalesOrderHeaderStats
+SET SalesOrderNumber = SalesOrderNumber
+WHERE SalesOrderID % 400 = 1
+
+--execute code in Listing 3-7
+
+UPDATE dbo.SalesOrderHeaderStats
+SET SalesOrderNumber = REVERSE(SalesOrderNumber)
+WHERE SalesOrderID % 400 = 1
+
+--execute code in Listing 3-7
+
+SET IDENTITY_INSERT dbo.SalesOrderHeaderStats ON
+INSERT INTO dbo.SalesOrderHeaderStats (SalesOrderID
+,OrderDate
+,SalesOrderNumber)
+SELECT SalesOrderID
+,OrderDate
+,SalesOrderNumber
+FROM Sales.SalesOrderHeader
+WHERE SalesOrderID > 63658
+SET IDENTITY_INSERT dbo.SalesOrderHeaderStats OFF
+
+--execute code in Listing 3-7
+
+DELETE FROM dbo.SalesOrderHeaderStats
+WHERE SalesOrderID <= 63658
+
+--execute code in Listing 3-7
+
+--Listing 3-9. Syntax for sys.dm_db_stats_histogram
+sys.dm_db_stats_histogram (object_id, stats_id)
+
+--Listing 3-10. sys.dm_db_stats_histogram Query for Sales.SalesOrderDetail
+USE AdventureWorks2017;
+GO
+
+SELECT h.object_id,
+       h.stats_id,
+       h.step_number,
+       h.range_high_key,
+       h.range_rows,
+       h.equal_rows,
+       h.distinct_range_rows,
+       h.average_range_rows
+FROM sys.stats s
+    CROSS APPLY sys.dm_db_stats_histogram(s.object_id, s.stats_id) h
+WHERE s.object_id = OBJECT_ID('Sales.SalesOrderDetail');
+
+--Listing 3-11. Syntax for sys.dm_db_incremental_stats_properties
+sys.dm_db_incremental_stats_properties (object_id, stats_id)
+
+--Listing 3-12. Query for Header Columns in sys.dm_db_index_usage_stats
+USE AdventureWorks2017
+GO
+
+SELECT TOP 10 OBJECT_NAME(i.object_id) AS table_name
+        ,i.name AS index_name
+        ,ius.database_id
+        ,ius.object_id
+        ,ius.index_id
+FROM sys.indexes i
+        LEFT JOIN sys.dm_db_index_usage_stats ius 
+                ON i.object_id = ius.object_id 
+                AND i.index_id = ius.index_id
+                AND ius.database_id = DB_ID()
+WHERE ius.index_id IS NULL
+AND OBJECTPROPERTY(i.object_id, 'IsUserTable') = 1
+ORDER BY table_name, index_name
+
+--Listing 3-13. Index Seek Queries
+USE AdventureWorks2017
+GO
+
+SELECT * FROM Sales.SalesOrderDetail
+WHERE SalesOrderID = 43659;
+
+SELECT * FROM Sales.SalesOrderDetail
+WHERE SalesOrderID BETWEEN 43659 AND 44659;
+
+--Listing 3-14. Query for index_seeks from sys.dm_db_index_usage_stats
+USE AdventureWorks2017
+GO
+
+SELECT TOP 10
+    OBJECT_NAME(i.object_id) AS table_name
+   ,i.name AS index_name
+   ,ius.user_seeks
+   ,ius.last_user_seek
+FROM sys.indexes i
+    INNER JOIN sys.dm_db_index_usage_stats ius
+                ON i.object_id = ius.object_id
+                AND i.index_id = ius.index_id
+                AND ius.database_id = DB_ID()
+WHERE ius.object_id = OBJECT_ID('Sales.SalesOrderDetail');
+
+--Listing 3-15. Index Scan Queries
+USE AdventureWorks2017
+GO
+
+SELECT * FROM  Sales.SalesOrderDetail;
+
+SELECT * FROM  Sales.SalesOrderDetail
+WHERE CarrierTrackingNumber = '4911-403C-98';
+
+--Listing 3-16. Query for index_scans from sys.dm_db_index_usage_stats
+USE AdventureWorks2017
+GO
+
+SELECT TOP 10
+    OBJECT_NAME(i.object_id) AS table_name
+   ,i.name AS index_name
+   ,ius.user_scans
+   ,ius.last_user_scan
+FROM sys.indexes i
+    INNER JOIN sys.dm_db_index_usage_stats ius
+                ON i.object_id = ius.object_id
+                AND i.index_id = ius.index_id
+                AND ius.database_id = DB_ID()
+WHERE ius.object_id = OBJECT_ID('Sales.SalesOrderDetail');
+
+--Listing 3-17. Index Lookup Query
+USE AdventureWorks2017
+GO
+
+SELECT ProductID, CarrierTrackingNumber
+FROM Sales.SalesOrderDetail
+WHERE ProductID = 778
+GO    
+
+--Listing 3-18. Query for index_lookups from sys.dm_db_index_usage_stats
+SELECT TOP 10
+    OBJECT_NAME(i.object_id) AS table_name
+   ,i.name AS index_name
+   ,ius.user_seeks
+   ,ius.user_lookups
+   ,ius.last_user_lookup
+FROM sys.indexes i    
+    INNER JOIN sys.dm_db_index_usage_stats ius
+                ON i.object_id = ius.object_id
+                AND i.index_id = ius.index_id
+                AND ius.database_id = DB_ID()
+WHERE ius.object_id = OBJECT_ID('Sales.SalesOrderDetail');
+
+--Listing 3-19. Index Lookup Query
+USE AdventureWorks2017
+GO
+
+INSERT INTO Sales.SalesOrderDetail
+(SalesOrderID, CarrierTrackingNumber, OrderQty, ProductID, SpecialOfferID, UnitPrice, UnitPriceDiscount, ModifiedDate)
+SELECT SalesOrderID, CarrierTrackingNumber, OrderQty, ProductID, SpecialOfferID, UnitPrice, UnitPriceDiscount, GETDATE() AS ModifiedDate
+FROM Sales.SalesOrderDetail
+WHERE SalesOrderDetailID = 1;
+
+UPDATE Sales.SalesOrderDetail
+SET CarrierTrackingNumber = '999-99-9999'
+WHERE ModifiedDate > DATEADD(d, -1, GETDATE());
+
+DELETE FROM Sales.SalesOrderDetail
+WHERE ModifiedDate > DATEADD(d, -1, GETDATE());
+
+--Listing 3-20. Query for index_lookups from sys.dm_db_index_usage_stats
+USE AdventureWorks2017
+GO
+
+SELECT TOP 10
+    OBJECT_NAME(i.object_id) AS table_name
+   ,i.name AS index_name
+   ,ius.user_updates
+   ,ius.last_user_update
+FROM sys.indexes i
+    INNER JOIN sys.dm_db_index_usage_stats ius
+                ON i.object_id = ius.object_id
+                AND i.index_id = ius.index_id
+                AND ius.database_id = DB_ID()
+WHERE ius.object_id = OBJECT_ID('Sales.SalesOrderDetail');
+
+--Listing 3-21. Update for Sales.SalesOrderDetail
+USE AdventureWorks2017
+GO
+
+UPDATE Sales.SalesOrderDetail
+SET UnitPriceDiscount = 0.01
+WHERE UnitPriceDiscount = 0.00;
+
+--Listing 3-22. Query for System Columns in sys.dm_db_index_usage_stats
+USE AdventureWorks2017
+GO
+
+SELECT S.object_id,
+       S.name,
+       S.auto_created,
+       STATS_DATE(S.object_id, S.stats_id),
+       X.stats_column_names
+FROM sys.stats S
+    CROSS APPLY
+(
+    SELECT STRING_AGG(C.name, ',') AS stats_column_names
+    FROM sys.stats_columns SC
+        INNER JOIN sys.columns C
+            ON C.object_id = SC.object_id
+               AND C.column_id = SC.column_id
+    WHERE S.object_id = SC.object_id
+          AND S.stats_id = SC.stats_id
+) X
+WHERE S.object_id = OBJECT_ID('Sales.SalesOrderDetail');
+
+SELECT OBJECT_NAME(i.object_id) AS table_name
+   ,i.name AS index_name
+   ,ius.system_seeks
+   ,ius.system_scans
+   ,ius.system_lookups
+   ,ius.system_updates
+   ,ius.last_system_seek
+   ,ius.last_system_scan
+   ,ius.last_system_lookup
+   ,ius.last_system_update
+FROM sys.indexes i
+    INNER JOIN sys.dm_db_index_usage_stats ius
+                ON i.object_id = ius.object_id
+                AND i.index_id = ius.index_id
+                AND ius.database_id = DB_ID()
+WHERE ius.object_id = OBJECT_ID('Sales.SalesOrderDetail');
+
+--Listing 3-23. Index Operational Stats Syntax
+sys.dm_db_index_operational_stats (
+    { database_id | NULL | 0 | DEFAULT }
+    , { object_id | NULL | 0 | DEFAULT }
+    , { index_id | 0 | NULL | -1 | DEFAULT }
+    , { partition_number | NULL | 0 | DEFAULT }
+)
+
+--Listing 3-24. DML Activity Script
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.Karaoke') IS NOT NULL
+  DROP TABLE dbo.Karaoke;
+
+CREATE TABLE dbo.Karaoke
+(
+ KaraokeID INT
+,Duet BIT
+,CONSTRAINT PK_Karaoke_KaraokeID PRIMARY KEY CLUSTERED (KaraokeID)
+);
+
+INSERT INTO dbo.Karaoke
+   SELECT ROW_NUMBER() OVER (ORDER BY t.object_id)
+       ,t.object_id % 2
+   FROM sys.tables t;
+
+DELETE FROM dbo.Karaoke
+WHERE  Duet = 0;
+
+UPDATE dbo.Karaoke
+SET    Duet = 0
+WHERE  Duet = 1;
+
+SELECT OBJECT_SCHEMA_NAME(ios.object_id) + '.' + OBJECT_NAME(ios.object_id) AS table_name
+    ,i.name AS index_name
+    ,ios.leaf_insert_count
+    ,ios.leaf_update_count
+    ,ios.leaf_delete_count
+    ,ios.leaf_ghost_count
+FROM sys.dm_db_index_operational_stats(DB_ID(),NULL,NULL,NULL) ios
+     INNER JOIN sys.indexes i
+       ON i.object_id = ios.object_id
+         AND i.index_id = ios.index_id
+WHERE ios.object_id = OBJECT_ID('dbo.Karaoke')
+ORDER BY ios.range_scan_count DESC;
+
+--Listing 3-25. Query for range_scan_count from sys.dm_db_index_operational_stats
+USE AdventureWorks2017
+GO
+
+SELECT OBJECT_NAME(ios.object_id) AS table_name
+    ,i.name AS index_name
+    ,ios.range_scan_count
+FROM sys.dm_db_index_operational_stats(DB_ID(),OBJECT_ID('Sales.SalesOrderDetail'),NULL,NULL) ios
+     INNER JOIN sys.indexes i
+       ON i.object_id = ios.object_id
+         AND i.index_id = ios.index_id
+ORDER BY ios.range_scan_count DESC;
+
+--Listing 3-26. Query for singleton_lookup_count from sys.dm_db_index_operational_stats
+USE AdventureWorks2017
+GO
+
+SELECT OBJECT_NAME(ios.object_id) AS table_name
+    ,i.name AS index_name
+    ,ios.singleton_lookup_count
+FROM sys.dm_db_index_operational_stats(DB_ID(),OBJECT_ID('Sales.SalesOrderDetail'),NULL,NULL) ios
+     INNER JOIN sys.indexes i
+       ON i.object_id = ios.object_id
+         AND i.index_id = ios.index_id
+ORDER BY ios. singleton_lookup_count DESC;
+
+--Listing 3-27. T-SQL Script for Forward Records
+USE AdventureWorks2017
+GO
+
+CREATE TABLE dbo.ForwardedRecords
+    (
+    ID INT IDENTITY(1,1)
+    ,VALUE VARCHAR(8000)
+    );
+INSERT INTO dbo.ForwardedRecords (VALUE)
+SELECT REPLICATE(type, 500)
+FROM sys.objects;
+
+UPDATE dbo.ForwardedRecords
+SET VALUE = REPLICATE(VALUE, 16)
+WHERE ID%3 = 1;
+
+--Listing 3-28. Query for forwarded_fetch_count from sys.dm_db_index_operational_stats
+SELECT OBJECT_NAME(ios.object_id) AS table_name
+       ,i.name AS index_name
+       ,ios.forwarded_fetch_count
+FROM    sys.dm_db_index_operational_stats(DB_ID(),OBJECT_ID('dbo.ForwardedRecords'),NULL,NULL) ios
+        INNER JOIN sys.indexes i
+            ON i.object_id = ios.object_id
+               AND i.index_id = ios.index_id
+ORDER BY ios.forwarded_fetch_count DESC
+
+--Listing 3-29. T-SQL Script to Generate Row Locks 
+USE AdventureWorks2017
+GO
+
+ALTER INDEX ALL ON Sales.SalesOrderDetail REBUILD;
+
+SELECT SalesOrderID
+   ,SalesOrderDetailID
+   ,CarrierTrackingNumber
+   ,OrderQty
+FROM Sales.SalesOrderDetail
+WHERE ProductID = 710;
+
+--Listing 3-30. Query for Row Locks in sys.dm_db_index_operational_stats
+USE AdventureWorks2017
+GO
+
+SELECT OBJECT_NAME(ios.object_id) AS table_name
+       ,i.name AS index_name
+       ,ios.row_lock_count
+       ,ios.row_lock_wait_count
+       ,ios.row_lock_wait_in_ms
+FROM sys.dm_db_index_operational_stats(DB_ID(),OBJECT_ID('Sales.SalesOrderDetail'),NULL,NULL) ios
+        INNER JOIN sys.indexes i
+            ON i.object_id = ios.object_id
+               AND i.index_id = ios.index_id
+ORDER BY ios.range_scan_count DESC;
+
+--Listing 3-31. Query for Page Locks in sys.dm_db_index_operational_stats
+USE AdventureWorks2017
+GO
+
+SELECT OBJECT_NAME(ios.object_id) AS table_name
+       ,i.name AS index_name
+       ,ios.page_lock_count
+       ,ios.page_lock_wait_count
+       ,ios.page_lock_wait_in_ms
+FROM sys.dm_db_index_operational_stats(DB_ID(),OBJECT_ID('Sales.SalesOrderDetail'),NULL,NULL) ios
+        INNER JOIN sys.indexes i
+            ON i.object_id = ios.object_id
+               AND i.index_id = ios.index_id
+ORDER BY ios.range_scan_count DESC;
+
+--Listing 3-32. T-SQL Script to Generate Lock Promotion
+USE AdventureWorks2017
+GO
+
+UPDATE Sales.SalesOrderDetail
+SET ProductID = ProductID
+WHERE ProductID <= 712
+
+--Listing 3-33. Query for Lock Escalation in sys.dm_db_index_operational_stats
+USE AdventureWorks2017
+GO    
+
+SELECT OBJECT_NAME(ios.object_id) AS table_name
+       ,i.name AS index_name
+       ,ios.index_lock_promotion_attempt_count
+       ,ios.index_lock_promotion_count
+FROM sys.dm_db_index_operational_stats(DB_ID(),OBJECT_ID('Sales.SalesOrderDetail'),NULL,NULL) ios
+        INNER JOIN sys.indexes i
+            ON i.object_id = ios.object_id
+               AND i.index_id = ios.index_id
+ORDER BY ios.range_scan_count DESC;
+
+--Listing 3-34. T-SQL Script to Generate Page I/O Latch
+USE AdventureWorks2017
+GO
+
+DBCC DROPCLEANBUFFERS
+GO
+
+SELECT *
+FROM Sales.SalesOrderDetail sod
+INNER JOIN Sales.SalesOrderHeader soh ON sod.SalesOrderID = soh.SalesOrderID
+INNER JOIN Production.Product p ON sod.ProductID = p.ProductID;
+
+--Listing 3-35. Query for Page I/O Latch Statistics in sys.dm_db_index_operational_stats
+USE AdventureWorks2017
+GO
+
+SELECT OBJECT_SCHEMA_NAME(ios.object_id) + '.' + OBJECT_NAME(ios.object_id) as table_name
+    ,i.name as index_name
+    ,page_io_latch_wait_count
+    ,page_io_latch_wait_in_ms
+    ,CAST(1. * page_io_latch_wait_in_ms
+      / NULLIF(page_io_latch_wait_count ,0) AS decimal(12,2)) AS page_io_avg_lock_wait_ms
+FROM sys.dm_db_index_operational_stats (DB_ID(), NULL, NULL, NULL) ios
+INNER JOIN sys.indexes i ON i.object_id = ios.object_id AND i.index_id = ios.index_id
+WHERE i.object_id = OBJECT_ID('Sales.SalesOrderHeader')
+OR i.object_id = OBJECT_ID('Sales.SalesOrderDetail')
+OR i.object_id = OBJECT_ID('Production.Product')
+ORDER BY 5 DESC; 
+
+--Listing 3-36. T-SQL Script to Generate Page Latch Scenario
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.PageLatchDemo') IS NOT NULL
+        DROP TABLE dbo.PageLatchDemo;
+
+CREATE TABLE dbo.PageLatchDemo
+(
+PageLatchDemoID INT IDENTITY (1,1)
+,FillerData  bit
+,CONSTRAINT PK_PageLatchDemo_PageLatchDemoID PRIMARY KEY CLUSTERED  (PageLatchDemoID)
+);
+
+--Listing 3-37. T-SQL Script to Generate Page Latch Load
+USE AdventureWorks2017
+GO
+
+INSERT INTO dbo.PageLatchDemo
+ (FillerData)
+SELECT  t.object_id % 2
+FROM sys.tables t;
+GO 5000
+
+--Listing 3-38. Query for Page Latch Statistics in sys.dm_db_index_operational_stats
+SELECT OBJECT_SCHEMA_NAME(ios.object_id) + '.' + OBJECT_NAME(ios.object_id) as table_name
+,i.name as index_name
+,page_latch_wait_count
+,page_latch_wait_in_ms
+,CAST(100. * page_latch_wait_in_ms 
+        / NULLIF(page_latch_wait_count ,0) AS decimal(12,2)) AS page_avg_lock_wait_ms
+FROM sys.dm_db_index_operational_stats (DB_ID(), NULL, NULL, NULL) ios
+INNER JOIN sys.indexes i ON i.object_id = ios.object_id AND i.index_id = ios.index_id
+WHERE i.object_id = OBJECT_ID('dbo.PageLatchDemo');
+
+--Listing 3-39. T-SQL Script to Generate Page Allocations
+USE AdventureWorks2017;
+GO
+
+SET NOCOUNT ON
+
+DROP TABLE IF EXISTS dbo.AllocationCycle;
+
+CREATE TABLE dbo.AllocationCycle (
+    ID INT IDENTITY,
+    FillerData VARCHAR(1000),
+    CreateDate DATETIME,
+    CONSTRAINT PK_AllocationCycle PRIMARY KEY CLUSTERED (ID)
+);
+GO
+
+INSERT INTO dbo.AllocationCycle (FillerData, CreateDate)
+VALUES (NEWID(), GETDATE());
+GO 100000
+
+--Listing 3-40. Query for Page Latch Statistics in sys.dm_db_index_operational_stats
+USE AdventureWorks2017
+GO
+
+SELECT OBJECT_SCHEMA_NAME(ios.object_id) + '.' + OBJECT_NAME(ios.object_id) as table_name
+  ,i.name as index_name
+  ,ios.leaf_allocation_count
+  ,ios.nonleaf_allocation_count
+  ,ios.leaf_page_merge_count
+  ,ios.nonleaf_page_merge_count
+FROM sys.dm_db_index_operational_stats(DB_ID(), OBJECT_ID('dbo.AllocationCycle'), NULL,NULL) ios
+  INNER JOIN sys.indexes i ON i.object_id = ios.object_id AND i.index_id = ios.index_id;
+
+--Listing 3-41. T-SQL Script to Increase Page Allocations
+USE AdventureWorks2017;
+GO
+
+UPDATE  dbo.AllocationCycle
+SET     FillerData = REPLICATE('x',1000)
+WHERE   ID % 3 = 1;
+
+--Listing 3-42. T-SQL Script to Generate Page Latch Scenario
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.PageCompression') IS NOT NULL
+        DROP TABLE dbo.PageCompression;
+
+CREATE TABLE dbo.PageCompression(
+        ProductPhotoID int NOT NULL,
+        ThumbNailPhoto varbinary(max) NULL,
+        LargePhoto varbinary(max) NULL,
+    CONSTRAINT PK_PageCompression PRIMARY KEY CLUSTERED (ProductPhotoID))
+    WITH (DATA_COMPRESSION = PAGE);
+
+INSERT INTO dbo.PageCompression
+SELECT ProductPhotoID
+   ,ThumbNailPhoto
+   ,LargePhoto
+FROM Production.ProductPhoto;
+
+--Listing 3-43. Query for Page Latch Statistics in sys.dm_db_index_operational_stats
+USE AdventureWorks2017
+GO
+
+SELECT OBJECT_SCHEMA_NAME(ios.object_id) + '.' + OBJECT_NAME(ios.object_id) as table_name
+,i.name as index_name
+,page_compression_attempt_count
+,page_compression_success_count
+FROM sys.dm_db_index_operational_stats (DB_ID(), OBJECT_ID('dbo.PageCompression'), NULL, NULL) ios
+    INNER JOIN sys.indexes i ON i.object_id = ios.object_id AND i.index_id = ios.index_id;
+
+--Listing 3-44. T-SQL Script to Generate Page Latch Scenario
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.LOBAccess') IS NOT NULL
+    DROP TABLE dbo.LOBAccess;
+
+CREATE TABLE dbo.LOBAccess
+  (
+  ID INT IDENTITY(1,1) PRIMARY KEY CLUSTERED
+  ,LOBValue VARCHAR(MAX)
+  ,FillerData CHAR(2000) DEFAULT(REPLICATE('X',2000))
+  ,FillerDate DATETIME DEFAULT(GETDATE())
+  );
+
+INSERT INTO dbo.LOBAccess (LOBValue)
+SELECT TOP 10 'Short Value'
+FROM Production.ProductPhoto;
+
+UPDATE dbo.LOBAccess
+SET LOBValue = REPLICATE('Long Value',8000);
+
+SELECT * FROM dbo.LOBAccess;
+
+--Listing 3-45. Query for Page Latch Statistics in sys.dm_db_index_operational_stats
+USE AdventureWorks2017
+GO
+
+SELECT OBJECT_SCHEMA_NAME(ios.object_id) + '.' + OBJECT_NAME(ios.object_id) as table_name
+    ,i.name as index_name
+    ,lob_fetch_in_pages
+    ,lob_fetch_in_bytes
+    ,lob_orphan_create_count
+    ,lob_orphan_insert_count
+    ,row_overflow_fetch_in_pages
+    ,row_overflow_fetch_in_bytes
+    ,column_value_push_off_row_count
+    ,column_value_pull_in_row_count
+FROM sys.dm_db_index_operational_stats (DB_ID(), OBJECT_ID('dbo.LOBAccess'), NULL, NULL) ios
+INNER JOIN sys.indexes i ON i.object_id = ios.object_id AND i.index_id = ios.index_id;
+
+--Listing 3-46. Parameters for sys.dm_db_index_physical_stats
+sys.dm_db_index_physical_stats ( 
+    { database_id | NULL | 0 | DEFAULT }
+    , { object_id | NULL | 0 | DEFAULT }
+    , { index_id | NULL | 0 | -1 | DEFAULT }
+    , { partition_number | NULL | 0 | DEFAULT }
+    , { mode | NULL | DEFAULT }
+)
+

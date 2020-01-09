@@ -1,0 +1,151 @@
+--Listing 5-1. CREATE TABLE with a GEOMETRY Data Type
+USE AdventureWorks2017
+GO 
+
+CREATE TABLE CITY_MAPS (
+     ID BIGINT PRIMARY KEY
+               IDENTITY(1, 1),
+     CITYNAME NVARCHAR(150),     CITY_GEOM GEOMETRY
+    );
+GO
+
+--Listing 5-2. Definition of a Spatial Index on a GEOMETRY Column
+USE AdventureWorks2017
+GO 
+
+CREATE SPATIAL INDEX IDX_CITY_GEOM
+ON CITY_MAPS (CITY_GEOM)
+USING GEOMETRY_GRID
+WITH (
+BOUNDING_BOX = ( xmin=-50, ymin=-50, xmax=500, ymax=500 ),
+GRIDS = (LOW, LOW, MEDIUM, HIGH),
+CELLS_PER_OBJECT = 24,
+PAD_INDEX  = ON );
+
+--Listing 5-3. Creating a Table to Hold GEOMETRY-Related Data
+USE AdventureWorks2017
+GO
+
+CREATE TABLE dbo.tl_2017_us_county (
+     STATEFP CHAR(2) NULL,
+     COUNTYFP CHAR(3) NULL,
+     COUNTYNS CHAR(8) NULL,
+     GEOID CHAR(5) NULL,
+     NAME CHAR(100) NULL,
+     NAMELSAD CHAR(100) NULL,
+     LSAD CHAR(2) NULL,
+     CLASSFP CHAR(2) NULL,
+     MTFCC CHAR(5) NULL,
+     CSAFP CHAR(3) NULL,
+     CBSAFP CHAR(5) NULL,
+     METDIVFP CHAR(5) NULL,
+     FUNCSTAT CHAR(1) NULL,
+     ALAND FLOAT NULL,
+     AWATER FLOAT NULL,
+     INTPTLAT CHAR(11) NULL,
+     INTPTLON CHAR(12) NULL,
+     GEOM GEOMETRY NULL
+    );
+
+--Listing 5-4. Initial Query for Pulling Back Spatial Data
+USE AdventureWorks2017
+GO
+
+SELECT  *
+FROM    dbo.tl_2017_us_county AS tuc
+WHERE   tuc.STATEFP = '41';
+
+--Listing 5-5. Using MakeValid() to Correct Any Invalid GEOMETRY Instances
+USE AdventureWorks2017
+GO
+
+UPDATE  dbo.tl_2017_us_county
+SET     GEOM = GEOM.MakeValid();
+
+--Listing 5-6. Query for the Top Ten Closest ZIP Codes to a Given Point
+USE AdventureWorks2017
+GO
+
+DECLARE @polygon GEOMETRY;
+
+SELECT  @polygon = tuc.GEOM
+FROM    dbo.tl_2017_us_county AS tuc
+WHERE   tuc.NAME = 'Tulsa';
+
+SELECT TOP 10
+        tuc.GEOM,
+        tuc.GEOM.STDistance(@polygon),
+        tuc.NAME
+FROM    dbo.tl_2017_us_county AS tuc
+WHERE   tuc.GEOM.STDistance(@polygon) IS NOT NULL
+        AND tuc.GEOM.STDistance(@polygon) < 1
+ORDER BY tuc.GEOM.STDistance(@polygon);
+
+--Listing 5-7. CREATE Statement for a Spatial Index
+USE AdventureWorks2017
+GO
+
+CREATE SPATIAL INDEX IDX_COUNTY_GEOM ON dbo.tl_2017_us_county
+(
+GEOM
+) USING  GEOMETRY_GRID 
+WITH (
+BOUNDING_BOX =(-91.513079, -87.496494, 36.970298, 36.970298), 
+GRIDS =(LEVEL_1 = LOW,LEVEL_2 = MEDIUM,LEVEL_3 = MEDIUM,LEVEL_4 = HIGH), 
+CELLS_PER_OBJECT = 16, 
+PAD_INDEX  = OFF, SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, 
+ALLOW_ROW_LOCKS  = ON, ALLOW_PAGE_LOCKS  = ON) ON [PRIMARY];
+
+--Listing 5-8. Querying to Retrieve Metadata About Spatial Indexes
+USE AdventureWorks2017
+GO
+
+SELECT  name,
+        type_desc,
+        spatial_index_type,
+        spatial_index_type_desc,
+        tessellation_scheme
+FROM    sys.spatial_indexes;
+
+--Listing 5-9. Querying to Retrieve Information About Tessellation
+USE AdventureWorks2017
+GO
+
+SELECT  tessellation_scheme,
+        bounding_box_xmax,
+        bounding_box_xmin,
+        bounding_box_ymax,
+        bounding_box_ymin,
+        level_1_grid_desc,
+        level_2_grid_desc,
+        level_3_grid_desc,
+        level_4_grid_desc,
+        cells_per_object
+FROM    sys.spatial_index_tessellations;
+
+--Listing 5-10. Investigating the geometry index
+USE AdventureWorks2017
+GO
+
+DECLARE @Sample GEOMETRY 
+   = 'POLYGON((-90.0 -180.0, -90.0 180.0, 90.0 180.0, 90.0 -180.0, -90.0 -180.0))';
+EXEC sp_help_spatial_GEOMETRY_index 'dbo.tl_2017_us_county', 'IDX_COUNTY_GEOM', 0, @Sample; 
+
+--Listing 5-11. Adjusting the Bounding Box of the Spatial Index
+USE AdventureWorks2017
+GO
+
+CREATE SPATIAL INDEX IDX_COUNTY_GEOM ON dbo.tl_2017_us_county
+(
+GEOM
+)USING  GEOMETRY_GRID 
+WITH (
+BOUNDING_BOX =(-96.9, -95.3, 36.4, 36.6), 
+GRIDS =(LEVEL_1 = LOW,LEVEL_2 = MEDIUM,LEVEL_3 = MEDIUM,LEVEL_4 = HIGH), 
+CELLS_PER_OBJECT = 16, 
+PAD_INDEX  = OFF, SORT_IN_TEMPDB = OFF, DROP_EXISTING = ON, 
+ALLOW_ROW_LOCKS  = ON, ALLOW_PAGE_LOCKS  = ON) ON [PRIMARY];
+GO
+
+
+

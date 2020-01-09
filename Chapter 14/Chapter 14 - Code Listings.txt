@@ -1,0 +1,1252 @@
+--Listing 14-1. Forwarded Records Counter Analysis
+USE IndexingMethod;
+GO
+
+WITH CounterSummary
+  AS (SELECT create_date,
+          server_name,
+          MAX(IIF(counter_name = 'Forwarded Records/sec', Calculated_Counter_value, NULL)) AS ForwardedRecords,
+          MAX(IIF(counter_name = 'Forwarded Records/sec', Calculated_Counter_value, NULL))
+          / (NULLIF(MAX(IIF(counter_name = 'Batch Requests/sec', Calculated_Counter_value, NULL)), 0) * 10) AS ForwardedRecordRatio
+      FROM dbo.IndexingCounters
+      WHERE counter_name IN ( 'Forwarded Records/sec', 'Batch Requests/sec' )
+      GROUP BY create_date,
+          server_name)
+SELECT server_name,
+    MIN(ForwardedRecords) AS MinForwardedRecords,
+    AVG(ForwardedRecords) AS AvgForwardedRecords,
+    MAX(ForwardedRecords) AS MaxForwardedRecords,
+    MIN(ForwardedRecordRatio) AS MinForwardedRecordRatio,
+    AVG(ForwardedRecordRatio) AS AvgForwardedRecordRatio,
+    MAX(ForwardedRecordRatio) AS MaxForwardedRecordRatio,
+    FORMAT(1. * SUM(IIF(ForwardedRecordRatio > 1, 1, NULL)) / COUNT(*), '0.00%') AS PctViolation
+FROM CounterSummary
+GROUP BY server_name;
+
+--Listing 14-2. Forwarded Records Example
+USE AdventureWorks2017
+GO
+
+CREATE TABLE dbo.HeapExample (
+    ID INT IDENTITY,
+    FillerData VARCHAR(2000)  
+    );
+
+INSERT INTO dbo.HeapExample (FillerData)
+SELECT REPLICATE('X',100)
+FROM sys.all_objects
+
+UPDATE dbo.HeapExample
+SET FillerData = REPLICATE('X',2000)
+WHERE ID % 5 = 1
+GO
+
+SELECT *
+FROM dbo.HeapExample
+WHERE ID % 3 = 1
+GO 2
+
+--Listing 14-3. Forwarded Records Snapshot Query
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('tempdb..#HeapList') IS NOT NULL 
+    DROP TABLE #HeapList
+
+CREATE TABLE #HeapList
+    (
+     database_id int
+    ,object_id int
+    ,page_count INT
+    ,avg_page_space_used_in_percent DECIMAL(6,3)
+    ,record_count INT
+    ,forwarded_record_count INT
+    )
+      
+DECLARE HEAP_CURS CURSOR FORWARD_ONLY FOR
+    SELECT object_id
+    FROM sys.indexes i
+    WHERE index_id = 0
+
+DECLARE @IndexID INT
+
+OPEN HEAP_CURS
+FETCH NEXT FROM HEAP_CURS INTO @IndexID
+
+WHILE @@FETCH_STATUS = 0 
+BEGIN
+    INSERT INTO #HeapList
+    SELECT
+        DB_ID()
+        ,object_id
+        ,page_count
+        ,CAST(avg_page_space_used_in_percent AS DECIMAL(6,3))
+        ,record_count
+        ,forwarded_record_count
+    FROM
+        sys.dm_db_index_physical_stats(DB_ID(), @IndexID, 0, NULL,'DETAILED') ; 
+
+    FETCH NEXT FROM HEAP_CURS INTO @IndexID
+END
+
+CLOSE HEAP_CURS
+DEALLOCATE HEAP_CURS
+
+SELECT
+    QUOTENAME(DB_NAME(database_id))
+    ,QUOTENAME(OBJECT_SCHEMA_NAME(object_id)) + '.'
+        + QUOTENAME(OBJECT_NAME(object_id)) AS ObjectName
+    ,page_count
+    ,avg_page_space_used_in_percent
+    ,record_count
+    ,forwarded_record_count
+    ,x.forwarded_fetch_count
+    ,CAST(100.*forwarded_record_count/record_count AS DECIMAL(6,3)) AS forwarded_record_pct
+    ,CAST(1.*x.forwarded_fetch_count/forwarded_record_count AS DECIMAL(12,3)) AS forwarded_row_ratio
+FROM #HeapList h
+    CROSS APPLY(
+        SELECT SUM(forwarded_fetch_count) AS forwarded_fetch_count
+        FROM IndexingMethod.dbo.index_operational_stats_history i
+        WHERE h.database_id = i.database_id
+        AND h.object_id = i.OBJECT_ID
+        AND i.index_id = 0) x
+WHERE forwarded_record_count > 0
+ORDER BY page_count DESC
+
+--Listing 14-4. Rebuild Heap Script
+USE AdventureWorks2017
+GO
+
+ALTER TABLE dbo.HeapExample REBUILD
+
+--Listing 14-5. FreeSpace Scans Counter Analysis
+USE IndexingMethod;
+GO
+
+WITH CounterSummary
+  AS (SELECT create_date,
+          server_name,
+          MAX(IIF(counter_name = 'FreeSpace Scans/sec', Calculated_Counter_value, NULL)) FreeSpaceScans,
+          MAX(IIF(counter_name = 'FreeSpace Page Fetches/sec', Calculated_Counter_value, NULL)) FreeSpacePageFetches,
+          MAX(IIF(counter_name = 'FreeSpace Scans/sec', Calculated_Counter_value, NULL))
+          / (NULLIF(MAX(IIF(counter_name = 'Batch Requests/sec', Calculated_Counter_value, NULL)), 0) * 10) AS ForwardedRecordRatio
+      FROM dbo.IndexingCounters
+      WHERE counter_name IN ( 'FreeSpace Scans/sec', 'FreeSpace Page Fetches/sec', 'Batch Requests/sec' )
+      GROUP BY create_date,
+          server_name)
+SELECT server_name,
+    MIN(FreeSpaceScans) AS MinFreeSpaceScans,
+    AVG(FreeSpaceScans) AS AvgFreeSpaceScans,
+    MAX(FreeSpaceScans) AS MaxFreeSpaceScans,
+    MIN(FreeSpacePageFetches) AS MinFreeSpacePageFetches,
+    AVG(FreeSpacePageFetches) AS AvgFreeSpacePageFetches,
+    MAX(FreeSpacePageFetches) AS MaxFreeSpacePageFetches,
+    MIN(ForwardedRecordRatio) AS MinForwardedRecordRatio,
+    AVG(ForwardedRecordRatio) AS AvgForwardedRecordRatio,
+    MAX(ForwardedRecordRatio) AS MaxForwardedRecordRatio,
+    FORMAT(1. * SUM(IIF(ForwardedRecordRatio > 1, 1, NULL)) / COUNT(*), '0.00%') AS PctViolation
+FROM CounterSummary
+GROUP BY server_name;
+
+--Listing 14-6. FreeSpace Scans Snapshot Query
+USE IndexingMethod
+GO
+
+SELECT
+    QUOTENAME(DB_NAME(database_id)) AS database_name
+    ,QUOTENAME(OBJECT_SCHEMA_NAME(object_id, database_id)) + '.'
+        + QUOTENAME(OBJECT_NAME(object_id, database_id)) AS ObjectName
+    , SUM(leaf_insert_count) AS leaf_insert_count
+    , SUM(leaf_allocation_count) AS leaf_allocation_count
+FROM dbo.index_operational_stats_history
+WHERE index_id = 0
+AND database_id > 4
+and QUOTENAME(OBJECT_NAME(object_id, database_id)) IS NOT NULL
+GROUP BY object_id, database_id
+ORDER BY leaf_insert_count DESC
+
+--Listing 14-7. Full Scans Counter Analysis
+USE IndexingMethod;
+GO
+
+WITH CounterSummary
+  AS (SELECT create_date,
+          server_name,
+          MAX(IIF(counter_name = 'Full Scans/sec', Calculated_Counter_value, NULL)) FullScans,
+          MAX(IIF(counter_name = 'Full Scans/sec', Calculated_Counter_value, NULL))
+          / (NULLIF(MAX(IIF(counter_name = 'Batch Requests/sec', Calculated_Counter_value, NULL)), 0) * 1000) AS FullRatio
+      FROM dbo.IndexingCounters
+      WHERE counter_name IN ( 'Full Scans/sec', 'Batch Requests/sec' )
+      GROUP BY create_date,
+          server_name)
+SELECT server_name,
+    MIN(FullScans) AS MinFullScans,
+    AVG(FullScans) AS AvgFullScans,
+    MAX(FullScans) AS MaxFullScans,
+    MIN(FullRatio) AS MinFullRatio,
+    AVG(FullRatio) AS AvgFullRatio,
+    MAX(FullRatio) AS MaxFullRatio,
+    FORMAT(1. * SUM(IIF(FullRatio > 1, 1, 0)) / COUNT(*), '0.00%') AS PctViolation
+FROM CounterSummary
+GROUP BY server_name;
+
+--Listing 14-8. Full Scans Example Query
+USE AdventureWorks2017
+GO
+
+SET NOCOUNT ON
+
+EXEC ('SELECT * INTO #temp FROM Sales.SalesOrderHeader')
+GO 1000
+
+--Listing 14-9. Full Scans Snapshot Query
+USE IndexingMethod;
+GO
+
+SELECT QUOTENAME(DB_NAME(uh.database_id)) AS database_name,
+    QUOTENAME(OBJECT_SCHEMA_NAME(uh.object_id, uh.database_id)) + '.'
+    + QUOTENAME(OBJECT_NAME(uh.object_id, uh.database_id)) AS ObjectName,
+    uh.index_id,
+    SUM(uh.user_scans) AS user_scans,
+    SUM(uh.user_seeks) AS user_seeks,
+    x.record_count
+FROM dbo.index_usage_stats_history uh
+CROSS APPLY (
+    SELECT DENSE_RANK() OVER (ORDER BY ph.create_date DESC) AS RankID,
+        ph.record_count
+    FROM dbo.index_physical_stats_history ph
+    WHERE ph.database_id = uh.database_id
+    AND ph.object_id = uh.object_id
+    AND ph.index_id = uh.index_id
+) x
+WHERE uh.database_id > 4
+AND uh.database_id <> DB_ID()
+AND OBJECT_NAME(uh.object_id, uh.database_id) IS NOT NULL
+AND x.RankID = 1
+GROUP BY uh.database_id,
+    uh.object_id,
+    uh.index_id,
+    x.record_count
+ORDER BY SUM(uh.user_scans) * x.record_count DESC;
+GO
+
+--Listing 14-10. Index Searches Counter Analysis
+USE IndexingMethod;
+GO
+
+WITH CounterSummary
+  AS (SELECT create_date,
+          server_name,
+          MAX(IIF(counter_name = 'Index Searches/sec', Calculated_Counter_value, NULL)) IndexSearches,
+          MAX(IIF(counter_name = 'Index Searches/sec', Calculated_Counter_value, NULL))
+          / (NULLIF(MAX(IIF(counter_name = 'Full Scans/sec', Calculated_Counter_value, NULL)), 0) * 1000) AS SearchToScanRatio
+      FROM dbo.IndexingCounters
+      WHERE counter_name IN ( 'Index Searches/sec', 'Full Scans/sec' )
+      GROUP BY create_date,
+          server_name)
+SELECT server_name,
+    MIN(IndexSearches) AS MinIndexSearches,
+    AVG(IndexSearches) AS AvgIndexSearches,
+    MAX(IndexSearches) AS MaxIndexSearches,
+    MIN(SearchToScanRatio) AS MinSearchToScanRatio,
+    AVG(SearchToScanRatio) AS AvgSearchToScanRatio,
+    MAX(SearchToScanRatio) AS MaxSearchToScanRatio,
+    FORMAT(1. * SUM(IIF(SearchToScanRatio > 1, 1, NULL)) / COUNT(*), '0.00%') AS PctViolation
+FROM CounterSummary
+GROUP BY server_name;
+
+--Listing 14-11. Full Scans Example Query
+USE AdventureWorks2017
+GO
+
+SET NOCOUNT ON
+
+EXEC('SELECT SOH.SalesOrderID, SOD.SalesOrderDetailID
+INTO #temp
+FROM Sales.SalesOrderHeader SOH
+INNER JOIN Sales.SalesOrderDetail SOD ON SOH.SalesOrderID = SOD.SalesOrderID
+WHERE SOH.SalesOrderID = 43659')
+GO 1000 
+
+--Listing 14-12. Index Searches Snapshot Query
+USE IndexingMethod;
+GO
+
+SELECT QUOTENAME(DB_NAME(uh.database_id)) AS database_name,
+    QUOTENAME(OBJECT_SCHEMA_NAME(uh.object_id, uh.database_id)) + '.'
+    + QUOTENAME(OBJECT_NAME(uh.object_id, uh.database_id)) AS ObjectName,
+    uh.index_id,
+    SUM(uh.user_scans) AS user_scans,
+    SUM(uh.user_seeks) AS user_seeks,
+    1. * SUM(uh.user_seeks) / NULLIF(SUM(uh.user_scans), 0) AS SeekScanRatio,
+    x.record_count
+FROM dbo.index_usage_stats_history uh
+CROSS APPLY (
+    SELECT DENSE_RANK() OVER (ORDER BY ph.create_date DESC) AS RankID,
+        ph.record_count
+    FROM dbo.index_physical_stats_history ph
+    WHERE ph.database_id = uh.database_id
+    AND ph.object_id = uh.object_id
+    AND ph.index_id = uh.index_id
+) x
+WHERE uh.database_id > 4
+AND uh.database_id <> DB_ID()
+AND x.RankID = 1
+AND x.record_count > 0
+GROUP BY uh.database_id,
+    uh.object_id,
+    uh.index_id,
+    x.record_count
+HAVING 1. * SUM(uh.user_seeks) / NULLIF(SUM(uh.user_scans), 0) < 1000
+AND SUM(uh.user_seeks) > 0
+ORDER BY 1. * SUM(uh.user_seeks) / NULLIF(SUM(uh.user_scans), 0) DESC,
+    SUM(uh.user_scans) DESC;
+GO
+
+--Listing 14-13. Page Splits Counter Analysis
+USE IndexingMethod;
+GO
+
+WITH CounterSummary
+  AS (SELECT create_date,
+          server_name,
+          MAX(IIF(counter_name = 'Page Splits/sec', Calculated_Counter_value, NULL)) PageSplits,
+          MAX(IIF(counter_name = 'Page Splits/sec', Calculated_Counter_value, NULL))
+          / (NULLIF(MAX(IIF(counter_name = 'Batch Requests/sec', Calculated_Counter_value, NULL)), 0) * 20) AS FullRatio
+      FROM dbo.IndexingCounters
+      WHERE counter_name IN ( 'Page Splits/sec', 'Batch Requests/sec' )
+      GROUP BY create_date,
+          server_name)
+SELECT server_name,
+    MIN(PageSplits) AS MinPageSplits,
+    AVG(PageSplits) AS AvgPageSplits,
+    MAX(PageSplits) AS MaxPageSplits,
+    MIN(FullRatio) AS MinFullRatio,
+    AVG(FullRatio) AS AvgFullRatio,
+    MAX(FullRatio) AS MaxFullRatio,
+    FORMAT(1. * SUM(IIF(FullRatio > 1, 1, 0)) / COUNT(*), '0.00%') AS PctViolation
+FROM CounterSummary
+GROUP BY server_name;
+
+--Listing 14-14. Page Splits Snapshot Query
+USE IndexingMethod;
+GO
+
+SELECT QUOTENAME(DB_NAME(database_id)) AS database_name,
+    QUOTENAME(OBJECT_SCHEMA_NAME(object_id, database_id)) + '.' + QUOTENAME(OBJECT_NAME(object_id, database_id)) AS ObjectName,
+    SUM(leaf_allocation_count) AS leaf_insert_count,
+    SUM(nonleaf_allocation_count) AS nonleaf_allocation_count,
+    MAX(IIF(RankID = 1, x.avg_fragmentation_in_percent, NULL)) AS last_fragmenation,
+    AVG(x.avg_fragmentation_in_percent) AS average_fragmenation
+FROM dbo.index_operational_stats_history oh
+CROSS APPLY (
+    SELECT DENSE_RANK() OVER (ORDER BY ph.create_date DESC) AS RankID,
+        CAST(ph.avg_fragmentation_in_percent AS DECIMAL(6, 3)) AS avg_fragmentation_in_percent
+    FROM dbo.index_physical_stats_history ph
+    WHERE ph.database_id = oh.database_id
+    AND ph.object_id = oh.object_id
+    AND ph.index_id = oh.index_id
+) x
+WHERE database_id > 4
+AND database_id <> DB_ID()
+AND oh.index_id <> 0
+AND (
+    leaf_allocation_count > 0
+    OR nonleaf_allocation_count > 0
+)
+GROUP BY object_id,
+    database_id
+ORDER BY leaf_insert_count DESC;
+
+--Listing 14-15. Page Lookups Counter Analysis
+USE IndexingMethod;
+GO
+
+WITH CounterSummary
+  AS (SELECT create_date,
+          server_name,
+          MAX(IIF(counter_name = 'Page Lookups/sec', Calculated_Counter_value, NULL)) PageLookups,
+          MAX(IIF(counter_name = 'Page Lookups/sec', Calculated_Counter_value, NULL))
+          / (NULLIF(MAX(IIF(counter_name = 'Batch Requests/sec', Calculated_Counter_value, NULL)), 0) * 100) AS PageLookupRatio
+      FROM dbo.IndexingCounters
+      WHERE counter_name IN ( 'Page Lookups/sec', 'Batch Requests/sec' )
+      GROUP BY create_date,
+          server_name)
+SELECT server_name,
+    MIN(PageLookups) AS MinPageLookups,
+    AVG(PageLookups) AS AvgPageLookups,
+    MAX(PageLookups) AS MaxPageLookups,
+    MIN(PageLookupRatio) AS MinPageLookupRatio,
+    AVG(PageLookupRatio) AS AvgPageLookupRatio,
+    MAX(PageLookupRatio) AS MaxPageLookupRatio,
+    FORMAT(1. * SUM(IIF(PageLookupRatio > 1, 1, 0)) / COUNT(*), '0.00%') AS PctViolation
+FROM CounterSummary
+GROUP BY server_name;
+
+--Listing 14-16. Page Lookups Snapshot Query
+USE IndexingMethod;
+GO
+
+SELECT QUOTENAME(DB_NAME(uh.database_id)) AS database_name,
+    QUOTENAME(OBJECT_SCHEMA_NAME(uh.object_id, uh.database_id)) + '.'
+    + QUOTENAME(OBJECT_NAME(uh.object_id, uh.database_id)) AS ObjectName,
+    uh.index_id,
+    SUM(uh.user_lookups) AS user_lookups,
+    SUM(uh.user_seeks) AS user_seeks,
+    SUM(uh.user_scans) AS user_scans,
+    x.record_count,
+    CAST(1. * SUM(uh.user_lookups) / IIF(SUM(uh.user_seeks) = 0, 1, SUM(uh.user_seeks)) AS DECIMAL(18, 2)) AS LookupSeekRatio
+FROM dbo.index_usage_stats_history uh
+CROSS APPLY (
+    SELECT DENSE_RANK() OVER (ORDER BY ph.create_date DESC) AS RankID,
+        ph.record_count
+    FROM dbo.index_physical_stats_history ph
+    WHERE ph.database_id = uh.database_id
+    AND ph.object_id = uh.object_id
+    AND ph.index_id = uh.index_id) x
+WHERE uh.database_id > 4
+AND x.RankID = 1
+AND x.record_count > 0
+GROUP BY uh.database_id,
+    uh.object_id,
+    uh.index_id,
+    x.record_count
+HAVING CAST(1. * SUM(uh.user_lookups) / IIF(SUM(uh.user_seeks) = 0, 1, SUM(uh.user_seeks)) AS DECIMAL(18, 2)) > 100
+ORDER BY 1. * SUM(uh.user_lookups) / IIF(SUM(uh.user_seeks) = 0, 1, SUM(uh.user_seeks)) DESC;
+GO
+
+--Listing 14-17. Page Compression Counter Analysis
+
+USE IndexingMethod;
+GO
+
+WITH CounterSummary
+  AS (SELECT create_date,
+          server_name,
+          MAX(IIF(counter_name = 'Page compression attempts/sec', Calculated_Counter_value, NULL)) PageCompressionAttempts,
+		  MAX(IIF(counter_name = 'Pages compressed/sec', Calculated_Counter_value, NULL)) PagesCompressed,
+          MAX(IIF(counter_name = 'Page compression attempts/sec', Calculated_Counter_value, NULL))
+          / (NULLIF(MAX(IIF(counter_name = 'Pages compressed/sec', Calculated_Counter_value, NULL)), 0) * 100.) AS CompressionRate
+      FROM dbo.IndexingCounters
+      WHERE counter_name IN ( 'Page compression attempts/sec', 'Pages compressed/sec')
+      GROUP BY create_date,
+          server_name)
+SELECT server_name,
+    MIN(PageCompressionAttempts) AS MinPageCompressionAttempts,
+    AVG(PageCompressionAttempts) AS AvgPageCompressionAttempts,
+    MAX(PageCompressionAttempts) AS MaxPageCompressionAttempts,
+	MIN(PagesCompressed) AS MinPagesCompressed,
+    AVG(PagesCompressed) AS AvgPagesCompressed,
+    MAX(PagesCompressed) AS MaxPagesCompressed,
+    MIN(CompressionRate) AS MinCompressionRate,
+    AVG(CompressionRate) AS AvgCompressionRate,
+    MAX(CompressionRate) AS MaxCompressionRate,
+    FORMAT(1. * SUM(IIF(CompressionRate < 95, 1, 0)) / COUNT(*), '0.00%') AS PctViolation
+FROM CounterSummary
+GROUP BY server_name;
+
+--Listing 14-18. Page Compression Snapshot Query
+USE IndexingMethod;
+GO
+
+SELECT QUOTENAME(DB_NAME(database_id)) AS database_name,
+    QUOTENAME(OBJECT_SCHEMA_NAME(object_id, database_id)) + '.' + QUOTENAME(OBJECT_NAME(object_id, database_id)) AS ObjectName,
+    oh.index_id,
+    SUM(oh.page_compression_attempt_count) AS page_compression_attempt_count,
+    SUM(oh.page_compression_success_count) AS page_compression_success_count,
+    SUM(1. * oh.page_compression_success_count / NULLIF(oh.page_compression_attempt_count, 0)) AS page_compression_success_rate
+FROM dbo.index_operational_stats_history oh
+WHERE database_id > 4
+AND database_id <> DB_ID()
+AND oh.page_compression_attempt_count > 0
+GROUP BY object_id,
+    database_id,
+    index_id;
+
+--Listing 14-19. Lock Wait Time Counter Analysis
+USE IndexingMethod;
+GO
+
+WITH CounterSummary
+  AS (SELECT create_date,
+          server_name,
+          instance_name,
+          MAX(IIF(counter_name = 'Lock Wait Time (ms)', Calculated_Counter_value, NULL)) / 1000 LockWaitTime
+      FROM dbo.IndexingCounters
+      WHERE counter_name = 'Lock Wait Time (ms)'
+      GROUP BY create_date,
+          server_name,
+          instance_name)
+SELECT CONVERT(VARCHAR(50), MAX(create_date), 101) AS CounterDate,
+    server_name,
+    instance_name,
+    MIN(LockWaitTime) AS MinLockWaitTime,
+    AVG(LockWaitTime) AS AvgLockWaitTime,
+    MAX(LockWaitTime) AS MaxLockWaitTime,
+    STDEV(LockWaitTime) AS StdDevLockWaitTime
+FROM CounterSummary
+GROUP BY server_name,
+    instance_name
+UNION ALL
+SELECT 'Baseline: ' + CONVERT(VARCHAR(50), start_date, 101) + ' --> ' + CONVERT(VARCHAR(50), end_date, 101),
+    server_name,
+    instance_name,
+    minimum_counter_value / 1000,
+    maximum_counter_value / 1000,
+    average_counter_value / 1000,
+    standard_deviation_counter_value / 1000
+FROM dbo.IndexingCountersBaseline
+WHERE counter_name = 'Lock Wait Time (ms)'
+ORDER BY instance_name,
+    CounterDate DESC;
+
+--Listing 14-20. Lock Wait Time Snapshot Query
+USE IndexingMethod;
+GO
+
+SELECT QUOTENAME(DB_NAME(database_id)) AS database_name,
+    QUOTENAME(OBJECT_SCHEMA_NAME(object_id, database_id)) + '.' + QUOTENAME(OBJECT_NAME(object_id, database_id)) AS ObjectName,
+    index_id,
+    SUM(row_lock_wait_count) AS row_lock_wait_count,
+    SUM(row_lock_wait_in_ms) / 1000. AS row_lock_wait_in_sec,
+    ISNULL(SUM(row_lock_wait_in_ms) / NULLIF(SUM(row_lock_wait_count), 0) / 1000., 0) AS avg_row_lock_wait_in_sec,
+    SUM(page_lock_wait_count) AS page_lock_wait_count,
+    SUM(page_lock_wait_in_ms) / 1000. AS page_lock_wait_in_sec,
+    ISNULL(SUM(page_lock_wait_in_ms) / NULLIF(SUM(page_lock_wait_count), 0) / 1000., 0) AS avg_page_lock_wait_in_sec
+FROM dbo.index_operational_stats_history oh
+WHERE database_id > 4
+AND database_id <> DB_ID()
+AND (
+    row_lock_wait_in_ms > 0
+    OR page_lock_wait_in_ms > 0
+)
+GROUP BY database_id,
+    object_id,
+    index_id;
+
+--Listing 14-21. Lock Waits Counter Analysis
+USE IndexingMethod;
+GO
+
+WITH CounterSummary
+  AS (SELECT create_date,
+          server_name,
+          instance_name,
+          MAX(IIF(counter_name = 'Lock Waits/sec', Calculated_Counter_value, NULL)) LockWaits
+      FROM dbo.IndexingCounters
+      WHERE counter_name = 'Lock Waits/sec'
+      GROUP BY create_date,
+          server_name,
+          instance_name)
+SELECT CONVERT(VARCHAR(50), MAX(create_date), 101) AS CounterDate,
+    server_name,
+    instance_name,
+    MIN(LockWaits) AS MinLockWait,
+    AVG(LockWaits) AS AvgLockWait,
+    MAX(LockWaits) AS MaxLockWait,
+    STDEV(LockWaits) AS StdDevLockWait
+FROM CounterSummary
+GROUP BY server_name,
+    instance_name
+UNION ALL
+SELECT 'Baseline: ' + CONVERT(VARCHAR(50), start_date, 101) + ' --> ' + CONVERT(VARCHAR(50), end_date, 101),
+    server_name,
+    instance_name,
+    minimum_counter_value / 1000,
+    maximum_counter_value / 1000,
+    average_counter_value / 1000,
+    standard_deviation_counter_value / 1000
+FROM dbo.IndexingCountersBaseline
+WHERE counter_name = 'Lock Waits/sec'
+ORDER BY instance_name,
+    CounterDate DESC;
+
+--Listing 14-22. Lock Waits Snapshot Query
+USE IndexingMethod;
+GO
+
+SELECT QUOTENAME(DB_NAME(database_id)) AS database_name,
+    QUOTENAME(OBJECT_SCHEMA_NAME(object_id, database_id)) + '.' + QUOTENAME(OBJECT_NAME(object_id, database_id)) AS ObjectName,
+    index_id,
+    SUM(row_lock_count) AS row_lock_count,
+    SUM(row_lock_wait_count) AS row_lock_wait_count,
+    ISNULL(SUM(row_lock_wait_count) / NULLIF(SUM(row_lock_count), 0), 0) AS pct_row_lock_wait,
+    SUM(page_lock_count) AS page_lock_count,
+    SUM(page_lock_wait_count) AS page_lock_wait_count,
+    ISNULL(SUM(page_lock_wait_count) / NULLIF(SUM(page_lock_count), 0), 0) AS pct_page_lock_wait
+FROM dbo.index_operational_stats_history oh
+WHERE database_id > 4
+AND (
+    row_lock_wait_in_ms > 0
+    OR page_lock_wait_in_ms > 0
+)
+GROUP BY database_id,
+    object_id,
+    index_id;
+
+--Listing 14-23. Number of Deadlocks Counter Analysis
+USE IndexingMethod;
+GO
+
+WITH CounterSummary
+  AS (SELECT create_date,
+          server_name,
+          Calculated_Counter_value AS NumberDeadlocks
+      FROM dbo.IndexingCounters
+      WHERE counter_name = 'Number of Deadlocks/sec')
+SELECT server_name,
+    MIN(NumberDeadlocks) AS MinNumberDeadlocks,
+    AVG(NumberDeadlocks) AS AvgNumberDeadlocks,
+    MAX(NumberDeadlocks) AS MaxNumberDeadlocks,
+    STDEV(NumberDeadlocks) AS StdDevNumberDeadlocks
+FROM CounterSummary
+GROUP BY server_name;
+
+--Listing 14-24. System-Health Deadlock Query
+USE IndexingMethod;
+GO
+
+WITH deadlock
+  AS (SELECT CAST(target_data AS XML) AS target_data
+      FROM sys.dm_xe_session_targets st
+      INNER JOIN sys.dm_xe_sessions s ON s.address = st.event_session_address
+      WHERE name = 'system_health'
+      AND target_name = 'ring_buffer')
+SELECT c.value('(@timestamp)[1]', 'datetime') AS event_timestamp,
+    c.query('data/value/deadlock')
+FROM deadlock d
+CROSS APPLY target_data.nodes('//RingBufferTarget/event') AS t(c)
+WHERE c.exist('.[@name = "xml_deadlock_report"]') = 1;
+
+--Listing 14-25. Wait Statistics Analysis Query
+USE IndexingMethod;
+GO
+
+WITH WaitStats
+  AS (SELECT DENSE_RANK() OVER (ORDER BY w.create_date ASC) AS RankID,
+          create_date,
+          wait_type,
+          waiting_tasks_count,
+          wait_time_ms,
+          max_wait_time_ms,
+          signal_wait_time_ms,
+          MIN(create_date) OVER () AS min_create_date,
+          MAX(create_date) OVER () AS max_create_date
+      FROM dbo.wait_stats_history w
+      WHERE wait_type NOT IN ( 'BROKER_EVENTHANDLER', 'BROKER_RECEIVE_WAITFOR', 'BROKER_TASK_STOP', 'BROKER_TO_FLUSH', 'BROKER_TRANSMITTER', 'CHECKPOINT_QUEUE', 'CHKPT', 'CLR_AUTO_EVENT', 'CLR_MANUAL_EVENT', 'CLR_SEMAPHORE', 'CXCONSUMER', 'DBMIRROR_DBM_EVENT', 'DBMIRROR_EVENTS_QUEUE', 'DBMIRROR_WORKER_QUEUE', 'DBMIRRORING_CMD', 'DIRTY_PAGE_POLL', 'DISPATCHER_QUEUE_SEMAPHORE', 'EXECSYNC', 'FSAGENT', 'FT_IFTS_SCHEDULER_IDLE_WAIT', 'FT_IFTSHC_MUTEX', 'HADR_CLUSAPI_CALL', 'HADR_FILESTREAM_IOMGR_IOCOMPLETIO,', 'HADR_LOGCAPTURE_WAIT', 'HADR_NOTIFICATION_DEQUEUE', 'HADR_TIMER_TASK', 'HADR_WORK_QUEUE', 'KSOURCE_WAKEUP', 'LAZYWRITER_SLEEP', 'LOGMGR_QUEUE', 'MEMORY_ALLOCATION_EXT', 'ONDEMAND_TASK_QUEUE', 'PARALLEL_REDO_DRAIN_WORKER', 'PARALLEL_REDO_LOG_CACHE', 'PARALLEL_REDO_TRAN_LIST', 'PARALLEL_REDO_WORKER_SYNC', 'PARALLEL_REDO_WORKER_WAIT_WORK', 'PREEMPTIVE_HADR_LEASE_MECHANISM', 'PREEMPTIVE_SP_SERVER_DIAGNOSTICS', 'PREEMPTIVE_OS_LIBRARYOPS', 'PREEMPTIVE_OS_COMOPS', 'PREEMPTIVE_OS_CRYPTOPS', 'PREEMPTIVE_OS_PIPEOPS', 'PREEMPTIVE_OS_AUTHENTICATIONOPS', 'PREEMPTIVE_OS_GENERICOPS', 'PREEMPTIVE_OS_VERIFYTRUST', 'PREEMPTIVE_OS_FILEOPS', 'PREEMPTIVE_OS_DEVICEOPS', 'PREEMPTIVE_OS_QUERYREGISTRY', 'PREEMPTIVE_OS_WRITEFILE', 'PREEMPTIVE_XE_CALLBACKEXECUTE', 'PREEMPTIVE_XE_DISPATCHER', 'PREEMPTIVE_XE_GETTARGETSTATE', 'PREEMPTIVE_XE_SESSIONCOMMIT', 'PREEMPTIVE_XE_TARGETINIT', 'PREEMPTIVE_XE_TARGETFINALIZE', 'PWAIT_ALL_COMPONENTS_INITIALIZED', 'PWAIT_DIRECTLOGCONSUMER_GETNEXT', 'PWAIT_EXTENSIBILITY_CLEANUP_TASK', 'QDS_PERSIST_TASK_MAIN_LOOP_SLEEP', 'QDS_ASYNC_QUEUE', 'QDS_CLEANUP_STALE_QUERIES_TASK_MAIN_LOOP_SLEEP', 'REQUEST_FOR_DEADLOCK_SEARCH', 'RESOURCE_QUEUE', 'SERVER_IDLE_CHECK', 'SLEEP_BPOOL_FLUSH', 'SLEEP_DBSTARTUP', 'SLEEP_DCOMSTARTUP', 'SLEEP_MASTERDBREADY', 'SLEEP_MASTERMDREADY', 'SLEEP_MASTERUPGRADED', 'SLEEP_MSDBSTARTUP', 'SLEEP_SYSTEMTASK', 'SLEEP_TASK', 'SLEEP_TEMPDBSTARTUP', 'SNI_HTTP_ACCEPT', 'SOS_WORK_DISPATCHER', 'SP_SERVER_DIAGNOSTICS_SLEEP', 'SQLTRACE_BUFFER_FLUSH', 'SQLTRACE_INCREMENTAL_FLUSH_SLEEP', 'SQLTRACE_WAIT_ENTRIES', 'STARTUP_DEPENDENCY_MANAGER', 'WAIT_FOR_RESULTS', 'WAITFOR', 'WAITFOR_TASKSHUTDOW', 'WAIT_XTP_HOST_WAIT', 'WAIT_XTP_OFFLINE_CKPT_NEW_LOG', 'WAIT_XTP_CKPT_CLOSE', 'WAIT_XTP_RECOVERY', 'XE_BUFFERMGR_ALLPROCESSED_EVENT', 'XE_DISPATCHER_JOI,', 'XE_DISPATCHER_WAIT', 'XE_LIVE_TARGET_TVF', 'XE_TIMER_EVENT'))
+SELECT wait_type,
+    DATEDIFF(ms, min_create_date, max_create_date) AS total_time_ms,
+    SUM(waiting_tasks_count) AS waiting_tasks_count,
+    SUM(wait_time_ms) AS wait_time_ms,
+    CAST(1. * SUM(wait_time_ms) / NULLIF(SUM(waiting_tasks_count),0) AS DECIMAL(18, 3)) AS avg_wait_time_ms,
+    CAST(100. * SUM(wait_time_ms) / NULLIF(DATEDIFF(ms, min_create_date, max_create_date),0) AS DECIMAL(18, 3)) AS pct_time_in_wait,
+    SUM(signal_wait_time_ms) AS signal_wait_time_ms,
+    CAST(100. * SUM(signal_wait_time_ms) / NULLIF(SUM(wait_time_ms), 0) AS DECIMAL(18, 3)) AS pct_time_runnable
+FROM WaitStats
+GROUP BY wait_type,
+    min_create_date,
+    max_create_date
+ORDER BY SUM(wait_time_ms) DESC;
+
+--Listing 14-26. Execution Plans in the plan cache that Utilize Parallelism
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+
+WITH XMLNAMESPACES (
+    DEFAULT 'http://schemas.microsoft.com/sqlserver/2004/07/showplan'
+)
+SELECT COALESCE(
+           DB_NAME([p].[dbid]),
+           [p].[query_plan].[value]('(//RelOp/OutputList/ColumnReference/@Database)[1]', 'nvarchar(128)')
+       ) AS [database_name],
+    IIF([p].[objectid] <> 0,
+        CONCAT(
+            QUOTENAME(DB_NAME([p].[dbid])),
+            '.',
+            QUOTENAME(OBJECT_SCHEMA_NAME([p].[objectid], [p].[dbid])),
+            '.',
+            QUOTENAME(OBJECT_NAME([p].[objectid], [p].[dbid]))
+        ),
+        NULL) AS [object_name],
+    [cp].[objtype],
+    [p].[query_plan],
+    [cp].[usecounts] AS [use_counts],
+    [cp].[plan_handle],
+    CAST('<?query --' + CHAR(13) + [q].[text] + CHAR(13) + '--?>' AS XML) AS [sql_text]
+FROM [sys].[dm_exec_cached_plans] AS [cp]
+CROSS APPLY [sys].[dm_exec_query_plan]([cp].[plan_handle]) AS [p]
+CROSS APPLY [sys].[dm_exec_sql_text]([cp].[plan_handle]) AS [q]
+WHERE [cp].[cacheobjtype] = 'Compiled Plan'
+AND [p].[query_plan].[exist]('//RelOp[@Parallel = "1"]') = 1
+ORDER BY COALESCE(
+             DB_NAME([p].[dbid]),
+             [p].[query_plan].[value]('(//RelOp/OutputList/ColumnReference/@Database)[1]', 'nvarchar(128)')
+         ),
+    [cp].[usecounts] DESC;
+
+--Listing 14-27. Execution Plans in the query store that Utilize Parallelism
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+
+SELECT IIF([qsq].[object_id] <> 0,
+           CONCAT(
+               QUOTENAME(DB_NAME()),
+               '.',
+               QUOTENAME(OBJECT_SCHEMA_NAME([qsq].[object_id])),
+               '.',
+               QUOTENAME(OBJECT_NAME([qsq].[object_id]))
+           ),
+           NULL) AS [object_name],
+    CAST([qsp].[query_plan] AS XML) AS [query_plan],
+    [deqs].[execution_count],
+    CAST('<?query --' + CHAR(13) + [qsqt].[query_sql_text] + CHAR(13) + '--?>' AS XML) AS [sql_text],
+    [qsp].[engine_version],
+    [qsp].[compatibility_level],
+    [qsq].[query_parameterization_type_desc],
+    [qsp].[is_forced_plan],
+    [deqs].[total_worker_time]
+FROM [sys].[query_store_plan] AS [qsp]
+INNER JOIN [sys].[query_store_query] AS [qsq] ON [qsp].[query_id] = [qsq].[query_id]
+INNER JOIN [sys].[query_store_query_text] AS [qsqt] ON [qsq].[query_text_id] = [qsqt].[query_text_id]
+INNER JOIN sys.[dm_exec_query_stats] AS deqs ON [last_compile_batch_sql_handle] = [deqs].[sql_handle]
+WHERE [qsp].[is_parallel_plan] = 1
+ORDER BY [deqs].[execution_count] DESC,
+    [deqs].[total_worker_time] DESC;
+
+--Listing 14-28. Parallel Queries Currently Executing
+WITH executing
+  AS (SELECT er.session_id,
+          er.request_id,
+          MAX(ISNULL(exec_context_id, 0)) AS number_of_workers,
+          er.sql_handle,
+          er.statement_start_offset,
+          er.statement_end_offset,
+          er.plan_handle
+      FROM sys.dm_exec_requests er
+      INNER JOIN sys.dm_os_tasks t ON er.session_id = t.session_id
+      INNER JOIN sys.dm_exec_sessions es ON er.session_id = es.session_id
+      WHERE es.is_user_process = 0x1
+      GROUP BY er.session_id,
+          er.request_id,
+          er.sql_handle,
+          er.statement_start_offset,
+          er.statement_end_offset,
+          er.plan_handle)
+SELECT QUOTENAME(DB_NAME(st.dbid)) AS database_name,
+    QUOTENAME(OBJECT_SCHEMA_NAME(st.objectid, st.dbid)) + '.' + QUOTENAME(OBJECT_NAME(st.objectid, st.dbid)) AS object_name,
+    e.session_id,
+    e.request_id,
+    e.number_of_workers,
+    SUBSTRING(
+        st.text,
+        e.statement_start_offset / 2,
+        (CASE
+              WHEN e.statement_end_offset = -1 THEN LEN(CONVERT(NVARCHAR(MAX), st.text)) * 2
+              ELSE e.statement_end_offset END - e.statement_start_offset
+        ) / 2
+    ) AS query_text,
+    qp.query_plan
+FROM executing e
+CROSS APPLY sys.dm_exec_sql_text(e.plan_handle) st
+CROSS APPLY sys.dm_exec_query_plan(e.plan_handle) qp
+WHERE number_of_workers > 0;
+
+--Listing 14-29. Extended Events Session for CXPACKET
+USE master;
+GO
+
+SELECT name,
+    map_key,
+    map_value
+FROM sys.dm_xe_map_values
+WHERE name = 'wait_types'
+AND map_value = 'CXPACKET';
+GO
+
+IF EXISTS (
+    SELECT *
+    FROM sys.server_event_sessions
+    WHERE name = 'ex_cxpacket'
+)
+    DROP EVENT SESSION ex_cxpacket ON SERVER;
+GO
+
+CREATE EVENT SESSION [ex_cxpacket]
+ON SERVER
+    ADD EVENT sqlos.wait_info
+    (ACTION (
+         sqlserver.plan_handle,
+         sqlserver.tsql_stack)
+     WHERE ([wait_type] = (265)
+           AND [sqlserver].[is_system] = (0)))
+    ADD TARGET package0.histogram
+    (SET filtering_event_name = N'sqlos.wait_info', slots = (2048), source = N'sqlserver.tsql_stack', source_type = (1))
+WITH (STARTUP_STATE = ON);
+GO
+
+ALTER EVENT SESSION ex_cxpacket ON SERVER STATE = START;
+GO
+
+--Listing 14-30. Query to View CXPACKET Extended Events Session
+WITH XData
+  AS (SELECT CAST(target_data AS XML) AS TargetData
+      FROM sys.dm_xe_session_targets st
+      INNER JOIN sys.dm_xe_sessions s ON s.address = st.event_session_address
+      WHERE name = 'ex_cxpacket'
+      AND target_name = 'histogram'),
+ParsedEvent
+  AS (SELECT c.value('(@count)[1]', 'bigint') AS event_count,
+          c.value('xs:hexBinary(substring((value/frames/frame/@handle)[1],3))', 'varbinary(255)') AS sql_handle,
+          c.value('(value/frames/frame/@offsetStart)[1]', 'int') AS statement_start_offset,
+          c.value('(value/frames/frame/@offsetEnd)[1]', 'int') AS statement_end_offset
+      FROM XData d
+      CROSS APPLY TargetData.nodes('//Slot') t(c) )
+SELECT QUOTENAME(DB_NAME(st.dbid)) AS database_name,
+    QUOTENAME(OBJECT_SCHEMA_NAME(st.objectid, st.dbid)) + '.' + QUOTENAME(OBJECT_NAME(st.objectid, st.dbid)) AS object_name,
+    e.event_count,
+    SUBSTRING(
+        st.text,
+        e.statement_start_offset / 2,
+        (IIF(e.statement_end_offset = -1, LEN(CONVERT(NVARCHAR(MAX), st.text)) * 2, e.statement_end_offset)
+         - e.statement_start_offset
+        ) / 2
+    ) AS query_text,
+    qp.query_plan
+FROM ParsedEvent e
+CROSS APPLY sys.dm_exec_sql_text(e.sql_handle) st
+CROSS APPLY (
+    SELECT plan_handle
+    FROM sys.dm_exec_query_stats qs
+    WHERE e.sql_handle = qs.sql_handle
+    GROUP BY plan_handle
+) x
+CROSS APPLY sys.dm_exec_query_plan(x.plan_handle) qp
+ORDER BY e.event_count DESC;
+
+--Listing 14-31. Buffer Allocation for Each Database
+SELECT LEFT(CASE database_id
+                 WHEN 32767 THEN 'ResourceDb'
+                 ELSE DB_NAME(database_id) END, 20) AS Database_Name,
+    COUNT(*) AS Buffered_Page_Count,
+    CAST(COUNT(*) * 8 / 1024.0 AS NUMERIC(10, 2)) AS Buffer_Pool_MB
+FROM sys.dm_os_buffer_descriptors
+GROUP BY DB_NAME(database_id),
+    database_id
+ORDER BY Buffered_Page_Count DESC;
+
+--Listing 14-32. Buffer Allocation by Table/Index
+WITH BufferAllocation
+  AS (SELECT object_id,
+          index_id,
+          allocation_unit_id
+      FROM sys.allocation_units AS au
+      INNER JOIN sys.partitions AS p ON au.container_id = p.hobt_id
+                                     AND (au.type = 1 OR au.type = 3)
+      UNION ALL
+      SELECT object_id,
+          index_id,
+          allocation_unit_id
+      FROM sys.allocation_units AS au
+      INNER JOIN sys.partitions AS p ON au.container_id = p.hobt_id
+                                     AND au.type = 2)
+SELECT t.name,
+    we.name,
+    we.type_desc,
+    COUNT(*) AS Buffered_Page_Count,
+    CAST(COUNT(*) * 8 / 1024.0 AS NUMERIC(10, 2)) AS Buffer_MB
+FROM sys.tables t
+INNER JOIN BufferAllocation ba ON t.object_id = ba.object_id
+LEFT JOIN sys.indexes we ON ba.object_id = we.object_id
+                         AND ba.index_id = we.index_id
+INNER JOIN sys.dm_os_buffer_descriptors bd ON ba.allocation_unit_id = bd.allocation_unit_id
+WHERE bd.database_id = DB_ID()
+GROUP BY t.name,
+    we.index_id,
+    we.name,
+    we.type_desc
+ORDER BY Buffered_Page_Count DESC;
+
+--Listing 14-33. Query to Identify Heaps
+SELECT QUOTENAME(DB_NAME()) AS database_name,
+    QUOTENAME(OBJECT_SCHEMA_NAME(we.object_id)) + '.' + QUOTENAME(OBJECT_NAME(we.object_id)) AS object_name,
+    we.index_id,
+    p.rows,
+    SUM(h.user_seeks) AS user_seeks,
+    SUM(h.user_scans) AS user_scans,
+    SUM(h.user_lookups) AS user_lookups,
+    SUM(h.user_updates) AS user_updates
+FROM sys.indexes we
+INNER JOIN sys.partitions p ON we.index_id = p.index_id
+                            AND we.object_id = p.object_id
+LEFT OUTER JOIN IndexingMethod.dbo.index_usage_stats_history h ON p.object_id = h.object_id
+                                                               AND p.index_id = h.index_id
+WHERE type_desc = 'HEAP'
+GROUP BY we.index_id,
+    p.rows,
+    we.object_id
+ORDER BY p.rows DESC;
+
+--Listing 14-34. Query to Identify Duplicate Indexes
+USE AdventureWorks2017;
+GO
+
+WITH IndexSchema
+  AS (SELECT we.object_id,
+          we.index_id,
+          we.name,
+          ISNULL(we.filter_definition, '') AS filter_definition,
+          we.is_unique,
+          (
+              SELECT QUOTENAME(CAST(ic.column_id AS VARCHAR(10)) + CASE
+                                                                        WHEN ic.is_descending_key = 1 THEN '-'
+                                                                        ELSE '+' END,
+                         '('
+                     )
+              FROM sys.index_columns ic
+              INNER JOIN sys.columns c ON ic.object_id = c.object_id
+                                       AND ic.column_id = c.column_id
+              WHERE we.object_id = ic.object_id
+              AND we.index_id = ic.index_id
+              AND is_included_column = 0
+              ORDER BY key_ordinal ASC
+              FOR XML PATH('')
+          ) + COALESCE((
+                  SELECT QUOTENAME(CAST(ic.column_id AS VARCHAR(10)) + CASE
+                                                                            WHEN ic.is_descending_key = 1 THEN '-'
+                                                                            ELSE '+' END,
+                             '('
+                         )
+                  FROM sys.index_columns ic
+                  INNER JOIN sys.columns c ON ic.object_id = c.object_id
+                                           AND ic.column_id = c.column_id
+                  LEFT OUTER JOIN sys.index_columns ic_key ON c.object_id = ic_key.object_id
+                                                           AND c.column_id = ic_key.column_id
+                                                           AND we.index_id = ic_key.index_id
+                                                           AND ic_key.is_included_column = 0
+                  WHERE we.object_id = ic.object_id
+                  AND ic.index_id = 1
+                  AND ic.is_included_column = 0
+                  AND ic_key.index_id IS NULL
+                  ORDER BY ic.key_ordinal ASC
+                  FOR XML PATH('')
+              ),
+                  ''
+              ) + CASE
+                       WHEN we.is_unique = 1 THEN 'U'
+                       ELSE '' END AS index_columns_keys_ids,
+          CASE
+               WHEN we.index_id IN ( 0, 1 ) THEN 'ALL-COLUMNS'
+               ELSE COALESCE((
+                        SELECT QUOTENAME(ic.column_id, '(')
+                        FROM sys.index_columns ic
+                        INNER JOIN sys.columns c ON ic.object_id = c.object_id
+                                                 AND ic.column_id = c.column_id
+                        LEFT OUTER JOIN sys.index_columns ic_key ON c.object_id = ic_key.object_id
+                                                                 AND c.column_id = ic_key.column_id
+                                                                 AND ic_key.index_id = 1
+                        WHERE we.object_id = ic.object_id
+                        AND we.index_id = ic.index_id
+                        AND ic.is_included_column = 1
+                        AND ic_key.index_id IS NULL
+                        ORDER BY ic.key_ordinal ASC
+                        FOR XML PATH('')
+                    ),
+                        SPACE(0)
+                    ) END AS included_columns_ids
+      FROM sys.tables t
+      INNER JOIN sys.indexes we ON t.object_id = we.object_id
+      INNER JOIN sys.data_spaces ds ON we.data_space_id = ds.data_space_id
+      INNER JOIN sys.dm_db_partition_stats ps ON we.object_id = ps.object_id
+                                              AND we.index_id = ps.index_id)
+SELECT QUOTENAME(DB_NAME()) AS database_name,
+    QUOTENAME(OBJECT_SCHEMA_NAME(is1.object_id)) + '.' + QUOTENAME(OBJECT_NAME(is1.object_id)) AS object_name,
+    is1.name AS index_name,
+    is2.name AS duplicate_index_name
+FROM IndexSchema is1
+INNER JOIN IndexSchema is2 ON is1.object_id = is2.object_id
+                           AND is1.index_id <> is2.index_id
+                           AND is1.index_columns_keys_ids = is2.index_columns_keys_ids
+                           AND is1.included_columns_ids = is2.included_columns_ids
+                           AND is1.filter_definition = is2.filter_definition
+                           AND is1.is_unique = is2.is_unique;
+
+--Listing 14-35. Query to Identify Overlapping Indexes
+WITH IndexSchema
+  AS (SELECT we.object_id,
+          we.index_id,
+          we.name,
+          (
+              SELECT CASE key_ordinal
+                          WHEN 0 THEN NULL
+                          ELSE QUOTENAME(column_id, '(') END
+              FROM sys.index_columns ic
+              WHERE ic.object_id = we.object_id
+              AND ic.index_id = we.index_id
+              ORDER BY key_ordinal,
+                  column_id
+              FOR XML PATH('')
+          ) AS index_columns_keys
+      FROM sys.tables t
+      INNER JOIN sys.indexes we ON t.object_id = we.object_id
+      WHERE we.type_desc IN ( 'CLUSTERED', 'NONCLUSTERED', 'HEAP' ))
+SELECT QUOTENAME(DB_NAME()) AS database_name,
+    QUOTENAME(OBJECT_SCHEMA_NAME(is1.object_id)) + '.' + QUOTENAME(OBJECT_NAME(is1.object_id)) AS object_name,
+    STUFF((
+              SELECT ', ' + c.name
+              FROM sys.index_columns ic
+              INNER JOIN sys.columns c ON ic.object_id = c.object_id
+                                       AND ic.column_id = c.column_id
+              WHERE ic.object_id = is1.object_id
+              AND ic.index_id = is1.index_id
+              ORDER BY ic.key_ordinal,
+                  ic.column_id
+              FOR XML PATH('')
+          ),
+        1,
+        2,
+        ''
+    ) AS index_columns,
+    STUFF((
+              SELECT ', ' + c.name
+              FROM sys.index_columns ic
+              INNER JOIN sys.columns c ON ic.object_id = c.object_id
+                                       AND ic.column_id = c.column_id
+              WHERE ic.object_id = is1.object_id
+              AND ic.index_id = is1.index_id
+              AND ic.is_included_column = 1
+              ORDER BY ic.column_id
+              FOR XML PATH('')
+          ),
+        1,
+        2,
+        ''
+    ) AS included_columns,
+    is1.name AS index_name,
+    SUM(CASE
+             WHEN is1.index_id = h.index_id THEN
+                 ISNULL(h.user_seeks, 0) + ISNULL(h.user_scans, 0) + ISNULL(h.user_lookups, 0)
+                 + ISNULL(h.user_updates, 0) END
+    ) index_activity,
+    is2.name AS duplicate_index_name,
+    SUM(CASE
+             WHEN is2.index_id = h.index_id THEN
+                 ISNULL(h.user_seeks, 0) + ISNULL(h.user_scans, 0) + ISNULL(h.user_lookups, 0)
+                 + ISNULL(h.user_updates, 0) END
+    ) duplicate_index_activity
+FROM IndexSchema is1
+INNER JOIN IndexSchema is2 ON is1.object_id = is2.object_id
+                           AND is1.index_id > is2.index_id
+                           AND (
+                               is1.index_columns_keys LIKE is2.index_columns_keys + '%'
+                               AND is2.index_columns_keys LIKE is2.index_columns_keys + '%'
+                           )
+LEFT OUTER JOIN IndexingMethod.dbo.index_usage_stats_history h ON is1.object_id = h.object_id
+GROUP BY is1.object_id,
+    is1.name,
+    is2.name,
+    is1.index_id;
+
+--Listing 14-36. Query to Identify Unindexed Foreign Keys
+WITH cIndexes
+  AS (SELECT we.object_id,
+          we.name,
+          (
+              SELECT QUOTENAME(ic.column_id, '(')
+              FROM sys.index_columns ic
+              WHERE we.object_id = ic.object_id
+              AND we.index_id = ic.index_id
+              AND is_included_column = 0
+              ORDER BY key_ordinal ASC
+              FOR XML PATH('')
+          ) AS indexed_compare
+      FROM sys.indexes we),
+cForeignKeys
+  AS (SELECT fk.name AS foreign_key_name,
+          'PARENT' AS foreign_key_type,
+          fkc.parent_object_id AS object_id,
+          STUFF((
+                    SELECT ', ' + QUOTENAME(c.name)
+                    FROM sys.foreign_key_columns ifkc
+                    INNER JOIN sys.columns c ON ifkc.parent_object_id = c.object_id
+                                             AND ifkc.parent_column_id = c.column_id
+                    WHERE fk.object_id = ifkc.constraint_object_id
+                    ORDER BY ifkc.constraint_column_id
+                    FOR XML PATH('')
+                ),
+              1,
+              2,
+              ''
+          ) AS fk_columns,
+          (
+              SELECT QUOTENAME(ifkc.parent_column_id, '(')
+              FROM sys.foreign_key_columns ifkc
+              WHERE fk.object_id = ifkc.constraint_object_id
+              ORDER BY ifkc.constraint_column_id
+              FOR XML PATH('')
+          ) AS fk_columns_compare
+      FROM sys.foreign_keys fk
+      INNER JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
+      WHERE fkc.constraint_column_id = 1),
+cRowCount
+  AS (SELECT object_id,
+          SUM(row_count) AS row_count
+      FROM sys.dm_db_partition_stats ps
+      WHERE index_id IN ( 1, 0 )
+      GROUP BY object_id)
+SELECT QUOTENAME(DB_NAME()),
+    QUOTENAME(OBJECT_SCHEMA_NAME(fk.object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.object_id)) AS ObjectName,
+    fk.foreign_key_name,
+    fk_columns,
+    row_count
+FROM cForeignKeys fk
+INNER JOIN cRowCount rc ON fk.object_id = rc.object_id
+LEFT OUTER JOIN cIndexes we ON fk.object_id = we.object_id
+                            AND we.indexed_compare LIKE fk.fk_columns_compare + '%'
+WHERE we.name IS NULL
+ORDER BY row_count DESC,
+    OBJECT_NAME(fk.object_id),
+    fk.fk_columns;
+
+--Listing 14-37. Query to Identify Uncompressed Indexes
+WITH partitioning
+  AS (SELECT dds.data_space_id,
+          dds.partition_scheme_id,
+          ds.name,
+          dds.destination_id AS partition_number,
+          CASE
+               WHEN prv.value IS NOT NULL THEN
+                   CONCAT(
+                       IIF(pf.boundary_value_on_right = 1, 'Less than ', 'Greater than or equal to '),
+                       CAST(prv.value AS VARCHAR(MAX))
+                   )
+               WHEN pf.boundary_value_on_right = 1 THEN 'Greater than MAX boundary'
+               ELSE 'Less than MIN boundary' END AS Boundary
+      FROM sys.destination_data_spaces AS dds
+      INNER JOIN sys.partition_schemes AS ps ON ps.data_space_id = dds.partition_scheme_id
+      INNER JOIN sys.partition_functions AS pf ON pf.function_id = ps.function_id
+      INNER JOIN sys.data_spaces AS ds ON dds.data_space_id = ds.data_space_id
+      LEFT OUTER JOIN sys.partition_range_values AS prv ON pf.function_id = prv.function_id
+                                                        AND prv.boundary_id = dds.destination_id)
+SELECT S.name AS schema_name,
+    T.name AS table_name,
+    I.name AS index_name,
+    I.index_id,
+    P.partition_number,
+    P.data_compression_desc,
+    I.type_desc,
+    IIF(DS.type_desc = 'PARTITION_SCHEME', PS.name, DS.name) AS file_group,
+    PS.Boundary AS partition_boundary,
+    DS.type_desc AS data_space_type,
+    P.rows,
+    CAST(dps.reserved_page_count * CAST(8 AS FLOAT) / 1024. AS DECIMAL(20, 3)) AS mb_size
+FROM sys.tables AS T
+INNER JOIN sys.schemas AS S ON S.schema_id = T.schema_id
+INNER JOIN sys.indexes AS I ON T.object_id = I.object_id
+INNER JOIN sys.partitions AS P ON I.object_id = P.object_id
+                               AND I.index_id = P.index_id
+INNER JOIN sys.dm_db_partition_stats AS dps ON P.object_id = dps.object_id
+                                            AND P.index_id = dps.index_id
+                                            AND P.partition_number = dps.partition_number
+LEFT OUTER JOIN partitioning AS PS ON I.data_space_id = PS.partition_scheme_id
+                                   AND P.partition_number = PS.partition_number
+INNER JOIN sys.data_spaces AS DS ON DS.data_space_id = I.data_space_id
+WHERE P.data_compression_desc = 'NONE';
+GO
+
+--Listing 14-37. Sample XML Input File for DTA
+<?xml version="1.0" encoding="utf-16" ?>
+<DTAXML xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.microsoft.com/sqlserver/2004/07/dta">
+  <DTAInput>
+    <Server>
+      <Name>STR8-SQL-PRD</Name>
+      <Database>
+        <Name>AdventureWorks2017</Name>
+      </Database>
+    </Server>
+    <Workload>
+      <File>c:\temp\IndexingMethod.trc</File>
+    </Workload>
+    <TuningOptions>
+      <TestServer>STR8-SQL-TEST </TestServer>
+      <FeatureSet>IDX</FeatureSet>
+      <Partitioning>NONE</Partitioning>
+      <KeepExisting>NONE</KeepExisting>
+    </TuningOptions>
+  </DTAInput>
+</DTAXML>
+
+--Listing 14-38. DTA Command with XML Input File
+dta -ix "c:\temp\SessionConfig.xml"
+
+--Listing 14-39. Query for Unused Indexes
+SELECT OBJECT_NAME(we.object_id) AS table_name,
+    COALESCE(we.name, SPACE(0)) AS index_name,
+    ps.partition_number,
+    ps.row_count,
+    CAST((ps.reserved_page_count * 8) / 1024. AS DECIMAL(12, 2)) AS size_in_mb,
+    COALESCE(ius.user_seeks, 0) AS user_seeks,
+    COALESCE(ius.user_scans, 0) AS user_scans,
+    COALESCE(ius.user_lookups, 0) AS user_lookups,
+    we.type_desc
+FROM sys.all_objects t
+INNER JOIN sys.indexes we ON t.object_id = we.object_id
+INNER JOIN sys.dm_db_partition_stats ps ON we.object_id = ps.object_id
+                                        AND we.index_id = ps.index_id
+LEFT OUTER JOIN sys.dm_db_index_usage_stats ius ON ius.database_id = DB_ID()
+                                                AND we.object_id = ius.object_id
+                                                AND we.index_id = ius.index_id
+WHERE we.type_desc NOT IN ( 'HEAP', 'CLUSTERED' )
+AND we.is_unique = 0
+AND we.is_primary_key = 0
+AND we.is_unique_constraint = 0
+AND COALESCE(ius.user_seeks, 0) <= 0
+AND COALESCE(ius.user_scans, 0) <= 0
+AND COALESCE(ius.user_lookups, 0) <= 0
+ORDER BY OBJECT_NAME(we.object_id),
+    we.name;
+
+--Listing 14-40. Query Plan Cache for Index Usage
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
+GO
+
+DECLARE @IndexName sysname = 'PK_SalesOrderHeader_SalesOrderID';
+SET @IndexName = QUOTENAME(@IndexName, '[');
+
+WITH XMLNAMESPACES (
+    DEFAULT 'http://schemas.microsoft.com/sqlserver/2004/07/showplan'
+)
+, IndexSearch
+  AS (SELECT qp.query_plan,
+          cp.usecounts,
+          ix.query('.') AS StmtSimple
+      FROM sys.dm_exec_cached_plans cp
+      OUTER APPLY sys.dm_exec_query_plan(cp.plan_handle) qp
+      CROSS APPLY qp.query_plan.nodes('//StmtSimple') AS p(ix)
+      WHERE query_plan.exist('//Object[@Index = sql:variable("@IndexName")]') = 1)
+SELECT StmtSimple.value('StmtSimple[1]/@StatementText', 'VARCHAR(4000)') AS sql_text,
+    obj.value('@Database', 'sysname') AS database_name,
+    obj.value('@Schema', 'sysname') AS schema_name,
+    obj.value('@Table', 'sysname') AS table_name,
+    obj.value('@Index', 'sysname') AS index_name,
+    ixs.query_plan
+FROM IndexSearch ixs
+CROSS APPLY StmtSimple.nodes('//Object') AS o(obj)
+WHERE obj.exist('//Object[@Index = sql:variable("@IndexName")]') = 1;
+
+--Listing 14-41. Query Plan Cache for Index Usage and Physical Operation
+DECLARE @IndexName sysname = 'IX_SalesOrderHeader_SalesPersonID';
+DECLARE @op sysname = 'Index Scan';
+
+;WITH XMLNAMESPACES (
+     DEFAULT N'http://schemas.microsoft.com/sqlserver/2004/07/showplan'
+ )
+SELECT cp.plan_handle,
+    DB_NAME(dbid) + '.' + OBJECT_SCHEMA_NAME(objectid, dbid) + '.' + OBJECT_NAME(objectid, dbid) AS database_object,
+    qp.query_plan,
+    c1.value('@PhysicalOp', 'nvarchar(50)'),
+    c2.value('@Index', 'nvarchar(max)')
+FROM sys.dm_exec_cached_plans cp
+CROSS APPLY sys.dm_exec_query_plan(cp.plan_handle) qp
+CROSS APPLY query_plan.nodes('//RelOp') r(c1)
+OUTER APPLY c1.nodes('IndexScan/Object') AS o(c2)
+WHERE c2.value('@Index', 'nvarchar(max)') = QUOTENAME(@IndexName, '[')
+AND c1.exist('@PhysicalOp[. = sql:variable("@op")]') = 1;
+

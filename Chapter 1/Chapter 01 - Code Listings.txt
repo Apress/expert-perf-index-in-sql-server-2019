@@ -1,0 +1,124 @@
+--Listing 1-1. CREATE INDEX Syntax
+CREATE [ UNIQUE ] [ CLUSTERED | NONCLUSTERED ] INDEX index_name 
+    ON <object> ( column [ ASC | DESC ] [ ,...n ] ) 
+    [ INCLUDE ( column_name [ ,...n ] ) ]
+    [ WHERE <filter_predicate> ]
+    [ WITH ( <relational_index_option> [ ,...n ] ) ]
+    [ ON { partition_scheme_name ( column_name ) 
+         | filegroup_name 
+         | default 
+         }
+    ]
+    [ FILESTREAM_ON { filestream_filegroup_name | partition_scheme_name | "NULL" } ]
+[ ; ]
+
+--Listing 1-2. CREATE INDEX Options
+PAD_INDEX = { ON | OFF }
+ | FILLFACTOR = fillfactor
+ | SORT_IN_TEMPDB = { ON | OFF }
+ | IGNORE_DUP_KEY = { ON | OFF }
+ | STATISTICS_NORECOMPUTE = { ON | OFF }
+ | STATISTICS_INCREMENTAL = { ON | OFF }
+ | DROP_EXISTING = { ON | OFF }
+ | ONLINE = { ON | OFF }
+ | RESUMABLE = {ON | OF }
+ | MAX_DURATION = <time> [MINUTES]
+ | ALLOW_ROW_LOCKS = { ON | OFF }
+ | ALLOW_PAGE_LOCKS = { ON | OFF }
+ | MAXDOP = max_degree_of_parallelism
+ | DATA_COMPRESSION = { NONE | ROW | PAGE} 
+   [ ON PARTITIONS ( { <partition_number_expression> | <range> } 
+   [ , ...n ] ) ]
+
+--Listing 1-3. CREATE INDEX Example
+USE AdventureWorks2017;
+GO
+
+CREATE INDEX IX_Sales_SalesOrderDetail_ProductId
+ON Sales.SalesOrderDetail (ProductID)
+INCLUDE (OrderQty, UnitPrice)
+WITH (DATA_COMPRESSION = PAGE);
+
+--Listing 1-4. ALTER INDEX Syntax
+ALTER INDEX { index_name | ALL }
+ ON <object>
+ { REBUILD 
+   [ [PARTITION = ALL] [ WITH ( <rebuild_index_option> [ ,...n ] ) ] 
+   | [ PARTITION = partition_number [ WITH ( <single_partition_rebuild_index_option> [ ,...n ] ) ] ] ]
+ | DISABLE
+ | REORGANIZE 
+        [ PARTITION = partition_number ]
+        [ WITH ( LOB_COMPACTION = { ON | OFF } ) ]
+ | SET ( <set_index_option> [ ,...n ] ) 
+ | RESUME [WITH (<resumable_index_options>,[...n])]
+ | PAUSE
+ | ABORT
+    } [ ; ]
+
+--Listing 1-5. ALTER INDEX Rebuild Options
+PAD_INDEX = { ON | OFF }  
+ | FILLFACTOR = fillfactor   
+ | SORT_IN_TEMPDB = { ON | OFF }  
+ | IGNORE_DUP_KEY = { ON | OFF }  
+ | STATISTICS_NORECOMPUTE = { ON | OFF }  
+ | STATISTICS_INCREMENTAL = { ON | OFF }  
+ | ONLINE = { ON [ ( <low_priority_lock_wait> ) ] | OFF } 
+ | RESUMABLE = { ON | OFF } 
+ | MAX_DURATION = <time> [MINUTES}     
+ | ALLOW_ROW_LOCKS = { ON | OFF }  
+ | ALLOW_PAGE_LOCKS = { ON | OFF }  
+ | MAXDOP = max_degree_of_parallelism  
+| DATA_COMPRESSION = { NONE | ROW | PAGE }   
+   [ ON PARTITIONS ( {<partition_number> [ TO <partition_number>] } [ , ...n ] ) ]  
+
+--Listing 1-6. ALTER INDEX Single Partition Rebuild Options
+SORT_IN_TEMPDB = { ON | OFF }  
+ | MAXDOP = max_degree_of_parallelism  
+ | RESUMABLE = { ON | OFF } 
+ | MAX_DURATION = <time> [MINUTES}     
+ | DATA_COMPRESSION = { NONE | ROW | PAGE } }  
+ | ONLINE = { ON [ ( <low_priority_lock_wait> ) ] | OFF }  
+
+--Listing 1-7. ALTER INDEX Reorganize Options
+LOB_COMPACTION = { ON | OFF } 
+
+--Listing 1-8. ALTER INDEX Resumable Options
+MAXDOP = max_degree_of_parallelism
+ | MAX_DURATION =<time> [MINUTES]
+ | <low_priority_lock_wait>  
+
+--Listing 1-9. ALTER INDEX Low Priority Lock Wait Options
+WAIT_AT_LOW_PRIORITY ( MAX_DURATION = <time> [ MINUTES ] ,   
+ ABORT_AFTER_WAIT = { NONE | SELF | BLOCKERS } )  
+
+--Listing 1-10. ALTER INDEX Example
+USE AdventureWorks2017;
+GO
+
+ALTER INDEX IX_Sales_SalesOrderDetail_ProductId
+ON Sales.SalesOrderDetail
+DISABLE;
+
+--Listing 1-11. DROP INDEX Syntax
+DROP INDEX [ IF EXISTS ]
+        index_name ON <object> 
+    [ WITH ( <drop_clustered_index_option> [ ,...n ] ) ]
+
+--Listing 1-12. DROP INDEX Options
+    MAXDOP = max_degree_of_parallelism
+    | ONLINE = { ON | OFF }
+  | MOVE TO { partition_scheme_name ( column_name ) 
+            | filegroup_name
+            | "default" 
+            }
+  [ FILESTREAM_ON { partition_scheme_name 
+            | filestream_filegroup_name 
+            | "default" } ]
+
+--Listing 1-13. ALTER INDEX Example
+USE AdventureWorks2017;
+GO
+
+DROP INDEX IX_Sales_SalesOrderDetail_ProductId ON Sales.SalesOrderDetail;
+
+

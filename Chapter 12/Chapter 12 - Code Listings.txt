@@ -1,0 +1,174 @@
+--Listing 12-1. Query for Addresses Beginning with 710
+USE AdventureWorks2017
+GO
+
+SET STATISTICS IO ON;
+
+SELECT AddressID, AddressLine1, AddressLine2, City, StateProvinceID, PostalCode
+FROM Person.Address
+WHERE AddressLine1 LIKE '710%';
+
+--Listing 12-2. Query for Addresses Containing “Longbrook
+USE AdventureWorks2017
+GO
+
+SET STATISTICS IO ON;
+
+SELECT AddressID, AddressLine1, AddressLine2, City, StateProvinceID, PostalCode
+FROM Person.Address
+WHERE AddressLine1 LIKE '%Longbrook%';
+
+--Listing 12-3. Query for Addresses Using CONTAINS
+USE AdventureWorks2017
+GO
+
+SET STATISTICS IO ON;
+
+CREATE FULLTEXT CATALOG ftQueryStrategies AS DEFAULT;
+
+CREATE FULLTEXT INDEX ON Person.Address(AddressLine1)
+KEY INDEX PK_Address_AddressID;
+GO
+
+SELECT AddressID, AddressLine1, AddressLine2, City, StateProvinceID, PostalCode
+FROM Person.Address
+WHERE CONTAINS (AddressLine1,'Longbrook');
+
+--Listing 12-4. Query with Concatenation
+USE AdventureWorks2017
+GO
+
+SET STATISTICS IO ON;
+
+CREATE INDEX IX_PersonContact_FirstNameLastName ON Person.Person (FirstName, LastName)
+GO
+
+SELECT BusinessEntityID, FirstName, LastName
+FROM Person.Person
+WHERE CONCAT(FirstName,' ',LastName) = 'Gustavo Achong'
+
+--Listing 12-5. Concatenation Without Spaces
+USE AdventureWorks2017
+GO
+
+SET STATISTICS IO ON;
+
+SELECT BusinessEntityID, FirstName, LastName
+FROM Person.Person  
+WHERE CONCAT(FirstName, LastName)= 'GustavoAchong';
+
+--Listing 12-6. Query with Concatenation Removed
+USE AdventureWorks2017
+GO
+
+SET STATISTICS IO ON;
+
+SELECT BusinessEntityID, FirstName, LastName
+FROM Person.Person
+WHERE FirstName = 'Gustavo'
+AND LastName = 'Achong';
+
+--Listing 12-7. Add Computed Columns to Person.Person
+USE AdventureWorks2017
+GO
+
+ALTER TABLE Person.Person 
+ADD FirstLastName AS (FirstName + ' ' + LastName)
+,CalculateValue AS (BusinessEntityID * EmailPromotion);
+
+--Listing 12-8. Computed Column Queries
+USE AdventureWorks2017
+GO
+
+SET STATISTICS IO ON 
+
+SELECT BusinessEntityID, FirstName, LastName, FirstLastName
+FROM Person.Person
+WHERE FirstLastName = 'Gustavo Achong';
+
+SELECT BusinessEntityID, CalculateValue
+FROM Person.Person
+WHERE CalculateValue = 198;
+
+--Listing 12-9. Computed Column Indexes
+USE AdventureWorks2017
+GO
+
+CREATE INDEX IX_PersonPerson_FirstLastName ON Person.Person(FirstLastName);
+CREATE INDEX IX_PersonPerson_CalculateValue ON Person.Person(CalculateValue);
+
+--Listing 12-10. Queries on FirstName Gustavo
+USE AdventureWorks2017
+GO
+
+SET STATISTICS IO ON
+
+SELECT BusinessEntityID, FirstName, LastName
+FROM Person.Person
+WHERE FirstName = 'Gustavo';
+
+SELECT BusinessEntityID, FirstName, LastName
+FROM Person.Person
+WHERE RTRIM(FirstName) = 'Gustavo';
+
+--Listing 12-11. Queries on FirstName Gustavo
+USE AdventureWorks2017
+GO
+
+CREATE INDEX IX_SalesSalesOrderHeader_OrderDate ON Sales.SalesOrderHeader(OrderDate);
+
+SET STATISTICS IO ON;
+
+SELECT SalesOrderID, OrderDate
+FROM Sales.SalesOrderHeader
+WHERE MONTH(OrderDate) = 12
+AND YEAR(OrderDate) = 2012;
+
+SELECT SalesOrderID, OrderDate
+FROM Sales.SalesOrderHeader
+WHERE OrderDate BETWEEN '20121201' AND '20121231';
+
+SET STATISTICS IO OFF;
+
+--Listing 12-12. Data Conversion Setup
+USE AdventureWorks2017
+GO
+
+SELECT BusinessEntityID
+    ,CAST(FirstName as varchar(50)) as FirstName
+    ,CAST(MiddleName as varchar(50)) as MiddleName
+    ,CAST(LastName as varchar(50)) as LastName
+INTO PersonPerson
+FROM Person.Person;
+
+CREATE CLUSTERED INDEX IX_PersonPerson_ContactID ON PersonPerson (BusinessEntityID);
+
+CREATE INDEX IX_PersonContact_FirstName ON PersonPerson(FirstName);
+
+--Listing 12-13. Implicit Conversion Queries
+USE AdventureWorks2017
+GO
+
+SET STATISTICS IO ON
+DECLARE @FirstName nvarchar(100)
+SET @FirstName = 'Gail';
+
+SELECT FirstName, LastName FROM PersonPerson
+WHERE FirstName = @FirstName
+OPTION (RECOMPILE);
+
+GO
+DECLARE @FirstName varchar(100)
+SET @FirstName = 'Gail';
+
+SELECT FirstName, LastName FROM PersonPerson
+WHERE FirstName = @FirstName
+OPTION (RECOMPILE);
+
+
+
+
+
+
+
+

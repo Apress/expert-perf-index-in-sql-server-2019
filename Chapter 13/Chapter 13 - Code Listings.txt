@@ -1,0 +1,1194 @@
+--Listing 13-1. Performance Counter Snapshot Table
+USE IndexingMethod;
+GO
+
+CREATE TABLE dbo.IndexingCounters
+    (
+    counter_id INT IDENTITY(1, 1),
+    create_date DATETIME2(0),
+    server_name VARCHAR(128) NOT NULL,
+    object_name VARCHAR(128) NOT NULL,
+    counter_name VARCHAR(128) NOT NULL,
+    instance_name VARCHAR(128) NULL,
+    Calculated_Counter_value FLOAT NULL,
+    CONSTRAINT PK_IndexingCounters
+        PRIMARY KEY CLUSTERED (counter_id)
+    );
+GO
+
+CREATE NONCLUSTERED INDEX IX_IndexingCounters_CounterName
+ON dbo.IndexingCounters (counter_name)
+INCLUDE (create_date, server_name, object_name, Calculated_Counter_value);
+
+--Listing 13-2. Performance Counter Snapshot Script
+DROP TABLE IF EXISTS #Counters;
+
+SELECT pc.object_name,
+    pc.counter_name
+INTO #Counters
+FROM sys.dm_os_performance_counters pc
+WHERE pc.cntr_type IN ( 272696576, 1073874176 )
+  AND (
+      pc.object_name LIKE '%:Access Methods%'
+    AND (
+        pc.counter_name LIKE 'Forwarded Records/sec%'
+       OR pc.counter_name LIKE 'FreeSpace Scans/sec%'
+       OR pc.counter_name LIKE 'FreeSpace Page Fetches/sec%'
+       OR pc.counter_name LIKE 'Full Scans/sec%'
+       OR pc.counter_name LIKE 'Index Searches/sec%'
+       OR pc.counter_name LIKE 'Page Splits/sec%'
+       OR pc.counter_name LIKE 'Page compression attempts/sec%'
+       OR pc.counter_name LIKE 'Pages compressed/sec%'
+    )
+  )
+   OR (
+       pc.object_name LIKE '%:Buffer Manager%'
+    AND (
+        pc.counter_name LIKE 'Page life expectancy%'
+       OR pc.counter_name LIKE 'Page lookups/sec%'
+    )
+   )
+   OR (
+       pc.object_name LIKE '%:Locks%'
+    AND (
+        pc.counter_name LIKE 'Lock Wait Time (ms)%'
+       OR pc.counter_name LIKE 'Lock Waits/sec%'
+       OR pc.counter_name LIKE 'Number of Deadlocks/sec%'
+    )
+   )
+   OR (
+       pc.object_name LIKE '%:SQL Statistics%'
+    AND pc.counter_name LIKE 'Batch Requests/sec%'
+   )
+GROUP BY pc.object_name,
+    pc.counter_name;
+
+DROP TABLE IF EXISTS #Baseline;
+
+SELECT GETDATE() AS sample_time,
+    pc1.object_name,
+    pc1.counter_name,
+    pc1.instance_name,
+    pc1.cntr_value,
+    pc1.cntr_type,
+    x.cntr_value AS base_cntr_value
+INTO #Baseline
+FROM sys.dm_os_performance_counters pc1
+INNER JOIN #Counters c ON c.object_name = pc1.object_name
+                      AND c.counter_name = pc1.counter_name
+OUTER APPLY (
+    SELECT cntr_value
+    FROM sys.dm_os_performance_counters pc2
+    WHERE pc2.cntr_type           = 1073939712
+      AND UPPER(pc1.counter_name) = UPPER(pc2.counter_name)
+      AND pc1.object_name         = pc2.object_name
+      AND pc1.instance_name       = pc2.instance_name
+) x;
+
+WAITFOR DELAY '00:00:15';
+
+INSERT INTO dbo.IndexingCounters (
+    create_date,
+    server_name,
+    object_name,
+    counter_name,
+    instance_name,
+    Calculated_Counter_value
+)
+SELECT GETDATE(),
+    LEFT(pc1.object_name, CHARINDEX(':', pc1.object_name) - 1),
+    SUBSTRING(pc1.object_name, 1 + CHARINDEX(':', pc1.object_name), LEN(pc1.object_name)),
+    pc1.counter_name,
+    pc1.instance_name,
+    CASE
+         WHEN pc1.cntr_type = 65792 THEN pc1.cntr_value
+         WHEN pc1.cntr_type = 272696576 THEN
+             COALESCE((1. * pc1.cntr_value - x.cntr_value) / NULLIF(DATEDIFF(s, sample_time, GETDATE()), 0), 0)
+         WHEN pc1.cntr_type = 537003264 THEN COALESCE((1. * pc1.cntr_value) / NULLIF(base.cntr_value, 0), 0)
+         WHEN pc1.cntr_type = 1073874176 THEN
+             COALESCE(
+                 (1. * pc1.cntr_value - x.cntr_value) / NULLIF(base.cntr_value - x.base_cntr_value, 0)
+                 / NULLIF(DATEDIFF(s, sample_time, GETDATE()), 0),
+                 0
+             ) END AS real_cntr_value
+FROM sys.dm_os_performance_counters pc1
+INNER JOIN #Counters c ON c.object_name = pc1.object_name
+                      AND c.counter_name = pc1.counter_name
+OUTER APPLY (
+    SELECT cntr_value,
+        base_cntr_value,
+        sample_time
+    FROM #Baseline b
+    WHERE b.object_name   = pc1.object_name
+      AND b.counter_name  = pc1.counter_name
+      AND b.instance_name = pc1.instance_name
+) x
+OUTER APPLY (
+    SELECT cntr_value
+    FROM sys.dm_os_performance_counters pc2
+    WHERE pc2.cntr_type           = 1073939712
+      AND UPPER(pc1.counter_name) = UPPER(pc2.counter_name)
+      AND pc1.object_name         = pc2.object_name
+      AND pc1.instance_name       = pc2.instance_name
+) base;
+
+--Listing 13-3. Performance Counter Baseline Table
+USE IndexingMethod;
+GO
+
+CREATE TABLE dbo.IndexingCountersBaseline
+    (
+    counter_baseline_id INT IDENTITY(1, 1),
+    start_date DATETIME2(0),
+    end_date DATETIME2(0),
+    server_name VARCHAR(128) NOT NULL,
+    object_name VARCHAR(128) NOT NULL,
+    counter_name VARCHAR(128) NOT NULL,
+    instance_name VARCHAR(128) NULL,
+    minimum_counter_value FLOAT NULL,
+    maximum_counter_value FLOAT NULL,
+    average_counter_value FLOAT NULL,
+    standard_deviation_counter_value FLOAT NULL,
+    CONSTRAINT PK_IndexingCountersBaseline
+        PRIMARY KEY CLUSTERED (counter_baseline_id)
+    );
+GO
+
+--Listing 13-4. Populate Counter Baseline Table
+USE IndexingMethod;
+GO
+
+DECLARE @StartDate DATETIME = '20190911',
+    @EndDate       DATETIME = '20190918';
+
+INSERT INTO dbo.IndexingCountersBaseline (
+    start_date,
+    end_date,
+    server_name,
+    object_name,
+    counter_name,
+    instance_name,
+    minimum_counter_value,
+    maximum_counter_value,
+    average_counter_value,
+    standard_deviation_counter_value
+)
+SELECT MIN(create_date),
+    MAX(create_date),
+    server_name,
+    object_name,
+    counter_name,
+    instance_name,
+    MIN(Calculated_Counter_value),
+    MAX(Calculated_Counter_value),
+    AVG(Calculated_Counter_value),
+    STDEV(Calculated_Counter_value)
+FROM dbo.IndexingCounters
+WHERE create_date BETWEEN @StartDate AND @EndDate
+GROUP BY server_name,
+    object_name,
+    counter_name,
+    instance_name;
+
+--Listing 13-5. Index Usage Stats Snapshot Tables Stats
+USE IndexingMethod;
+GO
+
+CREATE TABLE dbo.index_usage_stats_snapshot
+    (
+    snapshot_id INT IDENTITY(1, 1),
+    create_date DATETIME2(0),
+    database_id SMALLINT NOT NULL,
+    object_id INT NOT NULL,
+    index_id INT NOT NULL,
+    user_seeks BIGINT NOT NULL,
+    user_scans BIGINT NOT NULL,
+    user_lookups BIGINT NOT NULL,
+    user_updates BIGINT NOT NULL,
+    last_user_seek DATETIME,
+    last_user_scan DATETIME,
+    last_user_lookup DATETIME,
+    last_user_update DATETIME,
+    system_seeks BIGINT NOT NULL,
+    system_scans BIGINT NOT NULL,
+    system_lookups BIGINT NOT NULL,
+    system_updates BIGINT NOT NULL,
+    last_system_seek DATETIME,
+    last_system_scan DATETIME,
+    last_system_lookup DATETIME,
+    last_system_update DATETIME,
+    CONSTRAINT PK_IndexUsageStatsSnapshot
+        PRIMARY KEY CLUSTERED (snapshot_id),
+    CONSTRAINT UQ_IndexUsageStatsSnapshot
+        UNIQUE (create_date, database_id, object_id, index_id)
+    );
+
+CREATE TABLE dbo.index_usage_stats_history
+    (
+    history_id INT IDENTITY(1, 1),
+    create_date DATETIME2(0),
+    database_id SMALLINT NOT NULL,
+    object_id INT NOT NULL,
+    index_id INT NOT NULL,
+    user_seeks BIGINT NOT NULL,
+    user_scans BIGINT NOT NULL,
+    user_lookups BIGINT NOT NULL,
+    user_updates BIGINT NOT NULL,
+    last_user_seek DATETIME,
+    last_user_scan DATETIME,
+    last_user_lookup DATETIME,
+    last_user_update DATETIME,
+    system_seeks BIGINT NOT NULL,
+    system_scans BIGINT NOT NULL,
+    system_lookups BIGINT NOT NULL,
+    system_updates BIGINT NOT NULL,
+    last_system_seek DATETIME,
+    last_system_scan DATETIME,
+    last_system_lookup DATETIME,
+    last_system_update DATETIME,
+    CONSTRAINT PK_IndexUsageStatsHistory
+        PRIMARY KEY CLUSTERED (history_id),
+    CONSTRAINT UQ_IndexUsageStatsHistory
+        UNIQUE (create_date, database_id, object_id, index_id)
+    );
+
+--Listing 13-6. Index Usage Stats Snapshot Population
+USE IndexingMethod;
+GO
+
+INSERT INTO dbo.index_usage_stats_snapshot
+SELECT GETDATE(),
+    database_id,
+    object_id,
+    index_id,
+    user_seeks,
+    user_scans,
+    user_lookups,
+    user_updates,
+    last_user_seek,
+    last_user_scan,
+    last_user_lookup,
+    last_user_update,
+    system_seeks,
+    system_scans,
+    system_lookups,
+    system_updates,
+    last_system_seek,
+    last_system_scan,
+    last_system_lookup,
+    last_system_update
+FROM sys.dm_db_index_usage_stats;
+
+--Listing 13-7. Index Usage Stats Snapshot Population
+USE IndexingMethod;
+GO
+
+WITH IndexUsageCTE
+  AS (SELECT DENSE_RANK() OVER (ORDER BY create_date DESC) AS HistoryID,
+          create_date,
+          database_id,
+          object_id,
+          index_id,
+          user_seeks,
+          user_scans,
+          user_lookups,
+          user_updates,
+          last_user_seek,
+          last_user_scan,
+          last_user_lookup,
+          last_user_update,
+          system_seeks,
+          system_scans,
+          system_lookups,
+          system_updates,
+          last_system_seek,
+          last_system_scan,
+          last_system_lookup,
+          last_system_update
+      FROM dbo.index_usage_stats_snapshot)
+INSERT INTO dbo.index_usage_stats_history
+SELECT i1.create_date,
+    i1.database_id,
+    i1.object_id,
+    i1.index_id,
+    i1.user_seeks - COALESCE(i2.user_seeks, 0),
+    i1.user_scans - COALESCE(i2.user_scans, 0),
+    i1.user_lookups - COALESCE(i2.user_lookups, 0),
+    i1.user_updates - COALESCE(i2.user_updates, 0),
+    i1.last_user_seek,
+    i1.last_user_scan,
+    i1.last_user_lookup,
+    i1.last_user_update,
+    i1.system_seeks - COALESCE(i2.system_seeks, 0),
+    i1.system_scans - COALESCE(i2.system_scans, 0),
+    i1.system_lookups - COALESCE(i2.system_lookups, 0),
+    i1.system_updates - COALESCE(i2.system_updates, 0),
+    i1.last_system_seek,
+    i1.last_system_scan,
+    i1.last_system_lookup,
+    i1.last_system_update
+FROM IndexUsageCTE i1
+LEFT OUTER JOIN IndexUsageCTE i2 ON i1.database_id = i2.database_id
+    AND i1.object_id   = i2.object_id
+    AND i1.index_id    = i2.index_id
+    AND i2.HistoryID   = 2
+    --Verify no rows are less than 0
+    AND NOT (
+            i1.system_seeks - COALESCE(i2.system_seeks, 0) < 0
+            AND i1.system_scans - COALESCE(i2.system_scans, 0) < 0
+            AND i1.system_lookups - COALESCE(i2.system_lookups, 0) < 0
+            AND i1.system_updates - COALESCE(i2.system_updates, 0) < 0
+            AND i1.user_seeks - COALESCE(i2.user_seeks, 0) < 0
+            AND i1.user_scans - COALESCE(i2.user_scans, 0) < 0
+            AND i1.user_lookups - COALESCE(i2.user_lookups, 0) < 0
+            AND i1.user_updates - COALESCE(i2.user_updates, 0) < 0
+        )
+WHERE i1.HistoryID                                         = 1
+  --Only include rows are greater than 0
+  AND (
+      i1.system_seeks - COALESCE(i2.system_seeks, 0)       > 0
+     OR i1.system_scans - COALESCE(i2.system_scans, 0)     > 0
+     OR i1.system_lookups - COALESCE(i2.system_lookups, 0) > 0
+     OR i1.system_updates - COALESCE(i2.system_updates, 0) > 0
+     OR i1.user_seeks - COALESCE(i2.user_seeks, 0)         > 0
+     OR i1.user_scans - COALESCE(i2.user_scans, 0)         > 0
+     OR i1.user_lookups - COALESCE(i2.user_lookups, 0)     > 0
+     OR i1.user_updates - COALESCE(i2.user_updates, 0)     > 0
+  );
+  GO
+
+--Listing 13-8. Index Operational Stats Snapshot Tables Stats
+USE IndexingMethod;
+GO
+
+CREATE TABLE dbo.index_operational_stats_snapshot
+    (
+    snapshot_id INT IDENTITY(1, 1),
+    create_date DATETIME2(0),
+    database_id SMALLINT NOT NULL,
+    object_id INT NOT NULL,
+    index_id INT NOT NULL,
+    partition_number INT NOT NULL,
+    hobt_id BIGINT NOT NULL,
+    leaf_insert_count BIGINT NOT NULL,
+    leaf_delete_count BIGINT NOT NULL,
+    leaf_update_count BIGINT NOT NULL,
+    leaf_ghost_count BIGINT NOT NULL,
+    nonleaf_insert_count BIGINT NOT NULL,
+    nonleaf_delete_count BIGINT NOT NULL,
+    nonleaf_update_count BIGINT NOT NULL,
+    leaf_allocation_count BIGINT NOT NULL,
+    nonleaf_allocation_count BIGINT NOT NULL,
+    leaf_page_merge_count BIGINT NOT NULL,
+    nonleaf_page_merge_count BIGINT NOT NULL,
+    range_scan_count BIGINT NOT NULL,
+    singleton_lookup_count BIGINT NOT NULL,
+    forwarded_fetch_count BIGINT NOT NULL,
+    lob_fetch_in_pages BIGINT NOT NULL,
+    lob_fetch_in_bytes BIGINT NOT NULL,
+    lob_orphan_create_count BIGINT NOT NULL,
+    lob_orphan_insert_count BIGINT NOT NULL,
+    row_overflow_fetch_in_pages BIGINT NOT NULL,
+    row_overflow_fetch_in_bytes BIGINT NOT NULL,
+    column_value_push_off_row_count BIGINT NOT NULL,
+    column_value_pull_in_row_count BIGINT NOT NULL,
+    row_lock_count BIGINT NOT NULL,
+    row_lock_wait_count BIGINT NOT NULL,
+    row_lock_wait_in_ms BIGINT NOT NULL,
+    page_lock_count BIGINT NOT NULL,
+    page_lock_wait_count BIGINT NOT NULL,
+    page_lock_wait_in_ms BIGINT NOT NULL,
+    index_lock_promotion_attempt_count BIGINT NOT NULL,
+    index_lock_promotion_count BIGINT NOT NULL,
+    page_latch_wait_count BIGINT NOT NULL,
+    page_latch_wait_in_ms BIGINT NOT NULL,
+    page_io_latch_wait_count BIGINT NOT NULL,
+    page_io_latch_wait_in_ms BIGINT NOT NULL,
+    tree_page_latch_wait_count BIGINT NOT NULL,
+    tree_page_latch_wait_in_ms BIGINT NOT NULL,
+    tree_page_io_latch_wait_count BIGINT NOT NULL,
+    tree_page_io_latch_wait_in_ms BIGINT NOT NULL,
+    page_compression_attempt_count BIGINT NOT NULL,
+    page_compression_success_count BIGINT NOT NULL,
+    version_generated_inrow BIGINT NOT NULL,
+    version_generated_offrow BIGINT NOT NULL,
+    ghost_version_inrow BIGINT NOT NULL,
+    ghost_version_offrow BIGINT NOT NULL,
+    insert_over_ghost_version_inrow BIGINT NOT NULL,
+    insert_over_ghost_version_offrow BIGINT NOT NULL,
+    CONSTRAINT PK_IndexOperationalStatsSnapshot
+        PRIMARY KEY CLUSTERED (snapshot_id),
+    CONSTRAINT UQ_IndexOperationalStatsSnapshot
+        UNIQUE (create_date, database_id, object_id, index_id, partition_number)
+    );
+
+CREATE TABLE dbo.index_operational_stats_history
+    (
+    history_id INT IDENTITY(1, 1),
+    create_date DATETIME2(0),
+    database_id SMALLINT NOT NULL,
+    object_id INT NOT NULL,
+    index_id INT NOT NULL,
+    partition_number INT NOT NULL,
+    hobt_id BIGINT NOT NULL,
+    leaf_insert_count BIGINT NOT NULL,
+    leaf_delete_count BIGINT NOT NULL,
+    leaf_update_count BIGINT NOT NULL,
+    leaf_ghost_count BIGINT NOT NULL,
+    nonleaf_insert_count BIGINT NOT NULL,
+    nonleaf_delete_count BIGINT NOT NULL,
+    nonleaf_update_count BIGINT NOT NULL,
+    leaf_allocation_count BIGINT NOT NULL,
+    nonleaf_allocation_count BIGINT NOT NULL,
+    leaf_page_merge_count BIGINT NOT NULL,
+    nonleaf_page_merge_count BIGINT NOT NULL,
+    range_scan_count BIGINT NOT NULL,
+    singleton_lookup_count BIGINT NOT NULL,
+    forwarded_fetch_count BIGINT NOT NULL,
+    lob_fetch_in_pages BIGINT NOT NULL,
+    lob_fetch_in_bytes BIGINT NOT NULL,
+    lob_orphan_create_count BIGINT NOT NULL,
+    lob_orphan_insert_count BIGINT NOT NULL,
+    row_overflow_fetch_in_pages BIGINT NOT NULL,
+    row_overflow_fetch_in_bytes BIGINT NOT NULL,
+    column_value_push_off_row_count BIGINT NOT NULL,
+    column_value_pull_in_row_count BIGINT NOT NULL,
+    row_lock_count BIGINT NOT NULL,
+    row_lock_wait_count BIGINT NOT NULL,
+    row_lock_wait_in_ms BIGINT NOT NULL,
+    page_lock_count BIGINT NOT NULL,
+    page_lock_wait_count BIGINT NOT NULL,
+    page_lock_wait_in_ms BIGINT NOT NULL,
+    index_lock_promotion_attempt_count BIGINT NOT NULL,
+    index_lock_promotion_count BIGINT NOT NULL,
+    page_latch_wait_count BIGINT NOT NULL,
+    page_latch_wait_in_ms BIGINT NOT NULL,
+    page_io_latch_wait_count BIGINT NOT NULL,
+    page_io_latch_wait_in_ms BIGINT NOT NULL,
+    tree_page_latch_wait_count BIGINT NOT NULL,
+    tree_page_latch_wait_in_ms BIGINT NOT NULL,
+    tree_page_io_latch_wait_count BIGINT NOT NULL,
+    tree_page_io_latch_wait_in_ms BIGINT NOT NULL,
+    page_compression_attempt_count BIGINT NOT NULL,
+    page_compression_success_count BIGINT NOT NULL,
+    version_generated_inrow BIGINT NOT NULL,
+    version_generated_offrow BIGINT NOT NULL,
+    ghost_version_inrow BIGINT NOT NULL,
+    ghost_version_offrow BIGINT NOT NULL,
+    insert_over_ghost_version_inrow BIGINT NOT NULL,
+    insert_over_ghost_version_offrow BIGINT NOT NULL,
+    CONSTRAINT PK_IndexOperationalStatsHistory
+        PRIMARY KEY CLUSTERED (history_id),
+    CONSTRAINT UQ_IndexOperationalStatsHistory
+        UNIQUE (create_date, database_id, object_id, index_id, partition_number)
+    );
+
+--Listing 13-9. Index Operational Stats Snapshot Population
+USE IndexingMethod;
+GO
+
+TRUNCATE TABLE dbo.index_operational_stats_snapshot
+
+INSERT INTO dbo.index_operational_stats_snapshot
+SELECT GETDATE(),
+    database_id,
+    object_id,
+    index_id,
+    partition_number,
+    hobt_id,
+    leaf_insert_count,
+    leaf_delete_count,
+    leaf_update_count,
+    leaf_ghost_count,
+    nonleaf_insert_count,
+    nonleaf_delete_count,
+    nonleaf_update_count,
+    leaf_allocation_count,
+    nonleaf_allocation_count,
+    leaf_page_merge_count,
+    nonleaf_page_merge_count,
+    range_scan_count,
+    singleton_lookup_count,
+    forwarded_fetch_count,
+    lob_fetch_in_pages,
+    lob_fetch_in_bytes,
+    lob_orphan_create_count,
+    lob_orphan_insert_count,
+    row_overflow_fetch_in_pages,
+    row_overflow_fetch_in_bytes,
+    column_value_push_off_row_count,
+    column_value_pull_in_row_count,
+    row_lock_count,
+    row_lock_wait_count,
+    row_lock_wait_in_ms,
+    page_lock_count,
+    page_lock_wait_count,
+    page_lock_wait_in_ms,
+    index_lock_promotion_attempt_count,
+    index_lock_promotion_count,
+    page_latch_wait_count,
+    page_latch_wait_in_ms,
+    page_io_latch_wait_count,
+    page_io_latch_wait_in_ms,
+    tree_page_latch_wait_count,
+    tree_page_latch_wait_in_ms,
+    tree_page_io_latch_wait_count,
+    tree_page_io_latch_wait_in_ms,
+    page_compression_attempt_count,
+    page_compression_success_count,
+    version_generated_inrow,
+    version_generated_offrow,
+    ghost_version_inrow,
+    ghost_version_offrow,
+    insert_over_ghost_version_inrow,
+    insert_over_ghost_version_offrow
+FROM sys.dm_db_index_operational_stats(NULL, NULL, NULL, NULL)
+WHERE database_id > 4;
+
+--Listing 13-10. Index Operational Stats Snapshot Population
+USE IndexingMethod;
+GO
+
+WITH IndexOperationalCTE
+  AS (SELECT DENSE_RANK() OVER (ORDER BY create_date DESC) AS HistoryID,
+          create_date,
+          database_id,
+          object_id,
+          index_id,
+          partition_number,
+          hobt_id,
+          leaf_insert_count,
+          leaf_delete_count,
+          leaf_update_count,
+          leaf_ghost_count,
+          nonleaf_insert_count,
+          nonleaf_delete_count,
+          nonleaf_update_count,
+          leaf_allocation_count,
+          nonleaf_allocation_count,
+          leaf_page_merge_count,
+          nonleaf_page_merge_count,
+          range_scan_count,
+          singleton_lookup_count,
+          forwarded_fetch_count,
+          lob_fetch_in_pages,
+          lob_fetch_in_bytes,
+          lob_orphan_create_count,
+          lob_orphan_insert_count,
+          row_overflow_fetch_in_pages,
+          row_overflow_fetch_in_bytes,
+          column_value_push_off_row_count,
+          column_value_pull_in_row_count,
+          row_lock_count,
+          row_lock_wait_count,
+          row_lock_wait_in_ms,
+          page_lock_count,
+          page_lock_wait_count,
+          page_lock_wait_in_ms,
+          index_lock_promotion_attempt_count,
+          index_lock_promotion_count,
+          page_latch_wait_count,
+          page_latch_wait_in_ms,
+          page_io_latch_wait_count,
+          page_io_latch_wait_in_ms,
+          tree_page_latch_wait_count,
+          tree_page_latch_wait_in_ms,
+          tree_page_io_latch_wait_count,
+          tree_page_io_latch_wait_in_ms,
+          page_compression_attempt_count,
+          page_compression_success_count,
+          version_generated_inrow,
+          version_generated_offrow,
+          ghost_version_inrow,
+          ghost_version_offrow,
+          insert_over_ghost_version_inrow,
+          insert_over_ghost_version_offrow
+      FROM dbo.index_operational_stats_snapshot)
+INSERT INTO dbo.index_operational_stats_history
+SELECT i1.create_date,
+    i1.database_id,
+    i1.object_id,
+    i1.index_id,
+    i1.partition_number,
+	i1.hobt_id,
+    i1.leaf_insert_count - COALESCE(i2.leaf_insert_count, 0),
+    i1.leaf_delete_count - COALESCE(i2.leaf_delete_count, 0),
+    i1.leaf_update_count - COALESCE(i2.leaf_update_count, 0),
+    i1.leaf_ghost_count - COALESCE(i2.leaf_ghost_count, 0),
+    i1.nonleaf_insert_count - COALESCE(i2.nonleaf_insert_count, 0),
+    i1.nonleaf_delete_count - COALESCE(i2.nonleaf_delete_count, 0),
+    i1.nonleaf_update_count - COALESCE(i2.nonleaf_update_count, 0),
+    i1.leaf_allocation_count - COALESCE(i2.leaf_allocation_count, 0),
+    i1.nonleaf_allocation_count - COALESCE(i2.nonleaf_allocation_count, 0),
+    i1.leaf_page_merge_count - COALESCE(i2.leaf_page_merge_count, 0),
+    i1.nonleaf_page_merge_count - COALESCE(i2.nonleaf_page_merge_count, 0),
+    i1.range_scan_count - COALESCE(i2.range_scan_count, 0),
+    i1.singleton_lookup_count - COALESCE(i2.singleton_lookup_count, 0),
+    i1.forwarded_fetch_count - COALESCE(i2.forwarded_fetch_count, 0),
+    i1.lob_fetch_in_pages - COALESCE(i2.lob_fetch_in_pages, 0),
+    i1.lob_fetch_in_bytes - COALESCE(i2.lob_fetch_in_bytes, 0),
+    i1.lob_orphan_create_count - COALESCE(i2.lob_orphan_create_count, 0),
+    i1.lob_orphan_insert_count - COALESCE(i2.lob_orphan_insert_count, 0),
+    i1.row_overflow_fetch_in_pages - COALESCE(i2.row_overflow_fetch_in_pages, 0),
+    i1.row_overflow_fetch_in_bytes - COALESCE(i2.row_overflow_fetch_in_bytes, 0),
+    i1.column_value_push_off_row_count - COALESCE(i2.column_value_push_off_row_count, 0),
+    i1.column_value_pull_in_row_count - COALESCE(i2.column_value_pull_in_row_count, 0),
+    i1.row_lock_count - COALESCE(i2.row_lock_count, 0),
+    i1.row_lock_wait_count - COALESCE(i2.row_lock_wait_count, 0),
+    i1.row_lock_wait_in_ms - COALESCE(i2.row_lock_wait_in_ms, 0),
+    i1.page_lock_count - COALESCE(i2.page_lock_count, 0),
+    i1.page_lock_wait_count - COALESCE(i2.page_lock_wait_count, 0),
+    i1.page_lock_wait_in_ms - COALESCE(i2.page_lock_wait_in_ms, 0),
+    i1.index_lock_promotion_attempt_count - COALESCE(i2.index_lock_promotion_attempt_count, 0),
+    i1.index_lock_promotion_count - COALESCE(i2.index_lock_promotion_count, 0),
+    i1.page_latch_wait_count - COALESCE(i2.page_latch_wait_count, 0),
+    i1.page_latch_wait_in_ms - COALESCE(i2.page_latch_wait_in_ms, 0),
+    i1.page_io_latch_wait_count - COALESCE(i2.page_io_latch_wait_count, 0),
+    i1.page_io_latch_wait_in_ms - COALESCE(i2.page_io_latch_wait_in_ms, 0),
+    i1.tree_page_latch_wait_count - COALESCE(i2.tree_page_latch_wait_count, 0),
+    i1.tree_page_latch_wait_in_ms - COALESCE(i2.tree_page_latch_wait_in_ms, 0),
+    i1.tree_page_io_latch_wait_count - COALESCE(i2.tree_page_io_latch_wait_count, 0),
+    i1.tree_page_io_latch_wait_in_ms - COALESCE(i2.tree_page_io_latch_wait_in_ms, 0),
+    i1.page_compression_attempt_count - COALESCE(i2.page_compression_attempt_count, 0),
+    i1.page_compression_success_count - COALESCE(i2.page_compression_success_count, 0),
+    i1.version_generated_inrow - COALESCE(i2.version_generated_inrow, 0),
+    i1.version_generated_offrow - COALESCE(i2.version_generated_offrow, 0),
+    i1.ghost_version_inrow - COALESCE(i2.ghost_version_inrow, 0),
+    i1.ghost_version_offrow - COALESCE(i2.ghost_version_offrow, 0),
+    i1.insert_over_ghost_version_inrow - COALESCE(i2.insert_over_ghost_version_inrow, 0),
+    i1.insert_over_ghost_version_offrow - COALESCE(i2.insert_over_ghost_version_offrow, 0)
+FROM IndexOperationalCTE i1
+LEFT OUTER JOIN IndexOperationalCTE i2 ON i1.database_id = i2.database_id
+AND i1.object_id = i2.object_id
+AND i1.index_id = i2.index_id
+AND i1.partition_number = i2.partition_number
+AND i2.HistoryID = 2
+--Verify no rows are less than 0
+AND NOT (i1.leaf_insert_count - COALESCE(i2.leaf_insert_count, 0) < 0
+	AND i1.leaf_delete_count - COALESCE(i2.leaf_delete_count, 0) < 0
+	AND i1.leaf_update_count - COALESCE(i2.leaf_update_count, 0) < 0
+	AND i1.leaf_ghost_count - COALESCE(i2.leaf_ghost_count, 0) < 0
+	AND i1.nonleaf_insert_count - COALESCE(i2.nonleaf_insert_count, 0) < 0
+	AND i1.nonleaf_delete_count - COALESCE(i2.nonleaf_delete_count, 0) < 0
+	AND i1.nonleaf_update_count - COALESCE(i2.nonleaf_update_count, 0) < 0
+	AND i1.leaf_allocation_count - COALESCE(i2.leaf_allocation_count, 0) < 0
+	AND i1.nonleaf_allocation_count - COALESCE(i2.nonleaf_allocation_count, 0) < 0
+	AND i1.leaf_page_merge_count - COALESCE(i2.leaf_page_merge_count, 0) < 0
+	AND i1.nonleaf_page_merge_count - COALESCE(i2.nonleaf_page_merge_count, 0) < 0
+	AND i1.range_scan_count - COALESCE(i2.range_scan_count, 0) < 0
+	AND i1.singleton_lookup_count - COALESCE(i2.singleton_lookup_count, 0) < 0
+	AND i1.forwarded_fetch_count - COALESCE(i2.forwarded_fetch_count, 0) < 0
+	AND i1.lob_fetch_in_pages - COALESCE(i2.lob_fetch_in_pages, 0) < 0
+	AND i1.lob_fetch_in_bytes - COALESCE(i2.lob_fetch_in_bytes, 0) < 0
+	AND i1.lob_orphan_create_count - COALESCE(i2.lob_orphan_create_count, 0) < 0
+	AND i1.lob_orphan_insert_count - COALESCE(i2.lob_orphan_insert_count, 0) < 0
+	AND i1.row_overflow_fetch_in_pages - COALESCE(i2.row_overflow_fetch_in_pages, 0) < 0
+	AND i1.row_overflow_fetch_in_bytes - COALESCE(i2.row_overflow_fetch_in_bytes, 0) < 0
+	AND i1.column_value_push_off_row_count - COALESCE(i2.column_value_push_off_row_count, 0) < 0
+	AND i1.column_value_pull_in_row_count - COALESCE(i2.column_value_pull_in_row_count, 0) < 0
+	AND i1.row_lock_count - COALESCE(i2.row_lock_count, 0) < 0
+	AND i1.row_lock_wait_count - COALESCE(i2.row_lock_wait_count, 0) < 0
+	AND i1.row_lock_wait_in_ms - COALESCE(i2.row_lock_wait_in_ms, 0) < 0
+	AND i1.page_lock_count - COALESCE(i2.page_lock_count, 0) < 0
+	AND i1.page_lock_wait_count - COALESCE(i2.page_lock_wait_count, 0) < 0
+	AND i1.page_lock_wait_in_ms - COALESCE(i2.page_lock_wait_in_ms, 0) < 0
+	AND i1.index_lock_promotion_attempt_count - COALESCE(i2.index_lock_promotion_attempt_count, 0) < 0
+	AND i1.index_lock_promotion_count - COALESCE(i2.index_lock_promotion_count, 0) < 0
+	AND i1.page_latch_wait_count - COALESCE(i2.page_latch_wait_count, 0) < 0
+	AND i1.page_latch_wait_in_ms - COALESCE(i2.page_latch_wait_in_ms, 0) < 0
+	AND i1.page_io_latch_wait_count - COALESCE(i2.page_io_latch_wait_count, 0) < 0
+	AND i1.page_io_latch_wait_in_ms - COALESCE(i2.page_io_latch_wait_in_ms, 0) < 0
+	AND i1.tree_page_latch_wait_count - COALESCE(i2.tree_page_latch_wait_count, 0) < 0
+	AND i1.tree_page_latch_wait_in_ms - COALESCE(i2.tree_page_latch_wait_in_ms, 0) < 0
+	AND i1.tree_page_io_latch_wait_count - COALESCE(i2.tree_page_io_latch_wait_count, 0) < 0
+	AND i1.tree_page_io_latch_wait_in_ms - COALESCE(i2.tree_page_io_latch_wait_in_ms, 0) < 0
+	AND i1.page_compression_attempt_count - COALESCE(i2.page_compression_attempt_count, 0) < 0
+	AND i1.page_compression_success_count - COALESCE(i2.page_compression_success_count, 0) < 0
+	AND i1.version_generated_inrow - COALESCE(i2.version_generated_inrow, 0) < 0
+	AND i1.version_generated_offrow	- COALESCE(i2.version_generated_offrow, 0) < 0
+	AND i1.ghost_version_inrow - COALESCE(i2.ghost_version_inrow, 0) < 0
+	AND i1.ghost_version_offrow - COALESCE(i2.ghost_version_offrow, 0) < 0
+	AND i1.insert_over_ghost_version_inrow	- COALESCE(i2.insert_over_ghost_version_inrow, 0) < 0
+	AND i1.insert_over_ghost_version_offrow - COALESCE(i2.insert_over_ghost_version_offrow, 0) < 0
+)
+WHERE i1.HistoryID = 1
+--Only include rows are greater than 0
+AND (
+    i1.leaf_insert_count - COALESCE(i2.leaf_insert_count, 0) > 0
+    OR i1.leaf_delete_count - COALESCE(i2.leaf_delete_count, 0) > 0
+    OR i1.leaf_update_count - COALESCE(i2.leaf_update_count, 0) > 0
+    OR i1.leaf_ghost_count - COALESCE(i2.leaf_ghost_count, 0) > 0
+    OR i1.nonleaf_insert_count - COALESCE(i2.nonleaf_insert_count, 0) > 0
+    OR i1.nonleaf_delete_count - COALESCE(i2.nonleaf_delete_count, 0) > 0
+    OR i1.nonleaf_update_count - COALESCE(i2.nonleaf_update_count, 0) > 0
+    OR i1.leaf_allocation_count - COALESCE(i2.leaf_allocation_count, 0) > 0
+    OR i1.nonleaf_allocation_count - COALESCE(i2.nonleaf_allocation_count, 0) > 0
+    OR i1.leaf_page_merge_count - COALESCE(i2.leaf_page_merge_count, 0) > 0
+    OR i1.nonleaf_page_merge_count - COALESCE(i2.nonleaf_page_merge_count, 0) > 0
+    OR i1.range_scan_count - COALESCE(i2.range_scan_count, 0) > 0
+    OR i1.singleton_lookup_count - COALESCE(i2.singleton_lookup_count, 0) > 0
+    OR i1.forwarded_fetch_count - COALESCE(i2.forwarded_fetch_count, 0) > 0
+    OR i1.lob_fetch_in_pages - COALESCE(i2.lob_fetch_in_pages, 0) > 0
+    OR i1.lob_fetch_in_bytes - COALESCE(i2.lob_fetch_in_bytes, 0) > 0
+    OR i1.lob_orphan_create_count - COALESCE(i2.lob_orphan_create_count, 0) > 0
+    OR i1.lob_orphan_insert_count - COALESCE(i2.lob_orphan_insert_count, 0) > 0
+    OR i1.row_overflow_fetch_in_pages - COALESCE(i2.row_overflow_fetch_in_pages, 0) > 0
+    OR i1.row_overflow_fetch_in_bytes - COALESCE(i2.row_overflow_fetch_in_bytes, 0) > 0
+    OR i1.column_value_push_off_row_count - COALESCE(i2.column_value_push_off_row_count, 0) > 0
+    OR i1.column_value_pull_in_row_count - COALESCE(i2.column_value_pull_in_row_count, 0) > 0
+    OR i1.row_lock_count - COALESCE(i2.row_lock_count, 0) > 0
+    OR i1.row_lock_wait_count - COALESCE(i2.row_lock_wait_count, 0) > 0
+    OR i1.row_lock_wait_in_ms - COALESCE(i2.row_lock_wait_in_ms, 0) > 0
+    OR i1.page_lock_count - COALESCE(i2.page_lock_count, 0) > 0
+    OR i1.page_lock_wait_count - COALESCE(i2.page_lock_wait_count, 0) > 0
+    OR i1.page_lock_wait_in_ms - COALESCE(i2.page_lock_wait_in_ms, 0) > 0
+    OR i1.index_lock_promotion_attempt_count - COALESCE(i2.index_lock_promotion_attempt_count, 0) > 0
+    OR i1.index_lock_promotion_count - COALESCE(i2.index_lock_promotion_count, 0) > 0
+    OR i1.page_latch_wait_count - COALESCE(i2.page_latch_wait_count, 0) > 0
+    OR i1.page_latch_wait_in_ms - COALESCE(i2.page_latch_wait_in_ms, 0) > 0
+    OR i1.page_io_latch_wait_count - COALESCE(i2.page_io_latch_wait_count, 0) > 0
+    OR i1.page_io_latch_wait_in_ms - COALESCE(i2.page_io_latch_wait_in_ms, 0) > 0
+    OR i1.tree_page_latch_wait_count - COALESCE(i2.tree_page_latch_wait_count, 0) > 0
+    OR i1.tree_page_latch_wait_in_ms - COALESCE(i2.tree_page_latch_wait_in_ms, 0) > 0
+    OR i1.tree_page_io_latch_wait_count - COALESCE(i2.tree_page_io_latch_wait_count, 0) > 0
+    OR i1.tree_page_io_latch_wait_in_ms - COALESCE(i2.tree_page_io_latch_wait_in_ms, 0) > 0
+    OR i1.page_compression_attempt_count - COALESCE(i2.page_compression_attempt_count, 0) > 0
+    OR i1.page_compression_success_count - COALESCE(i2.page_compression_success_count, 0) > 0
+    OR i1.version_generated_inrow - COALESCE(i2.version_generated_inrow, 0) > 0
+    OR i1.version_generated_offrow - COALESCE(i2.version_generated_offrow, 0) > 0
+    OR i1.ghost_version_inrow - COALESCE(i2.ghost_version_inrow, 0) > 0
+    OR i1.ghost_version_offrow - COALESCE(i2.ghost_version_offrow, 0) > 0
+    OR i1.insert_over_ghost_version_inrow - COALESCE(i2.insert_over_ghost_version_inrow, 0) > 0
+    OR i1.insert_over_ghost_version_offrow - COALESCE(i2.insert_over_ghost_version_offrow, 0) > 0
+);
+
+--Listing 13-11. Index Physical Stats History Table
+USE IndexingMethod;
+GO
+
+CREATE TABLE dbo.index_physical_stats_history
+    (
+    history_id INT IDENTITY(1, 1),
+    create_date DATETIME2(0),
+    database_id SMALLINT,
+    object_id INT,
+    index_id INT,
+    partition_number INT,
+    index_type_desc NVARCHAR(60),
+    alloc_unit_type_desc NVARCHAR(60),
+    index_depth TINYINT,
+    index_level TINYINT,
+    avg_fragmentation_in_percent FLOAT,
+    fragment_count BIGINT,
+    avg_fragment_size_in_pages FLOAT,
+    page_count BIGINT,
+    avg_page_space_used_in_percent FLOAT,
+    record_count BIGINT,
+    ghost_record_count BIGINT,
+    version_ghost_record_count BIGINT,
+    min_record_size_in_bytes INT,
+    max_record_size_in_bytes INT,
+    avg_record_size_in_bytes FLOAT,
+    forwarded_record_count BIGINT,
+    compressed_page_count BIGINT,
+    hobt_id BIGINT NULL,
+    columnstore_delete_buffer_state TINYINT NULL,
+    columnstore_delete_buffer_state_desc NVARCHAR(60) NULL,
+    version_record_count BIGINT NULL,
+    inrow_version_record_count BIGINT NULL,
+    inrow_diff_version_record_count BIGINT NULL,
+    total_inrow_version_payload_size_in_bytes BIGINT NULL,
+    offrow_regular_version_record_count BIGINT NULL,
+    offrow_long_term_version_record_count BIGINT NULL,
+    CONSTRAINT PK_IndexPhysicalStatsHistory
+        PRIMARY KEY CLUSTERED (history_id),
+    CONSTRAINT UQ_IndexPhysicalStatsHistory
+        UNIQUE
+        (
+            create_date,
+            database_id,
+            object_id,
+            index_id,
+            partition_number,
+            alloc_unit_type_desc,
+            index_depth,
+            index_level
+        )
+    );
+
+--Listing 13-12. Index Physical Stats History Population
+USE IndexingMethod;
+GO
+
+DECLARE @DatabaseID INT;
+
+DECLARE DatabaseList CURSOR FAST_FORWARD FOR
+SELECT database_id
+FROM sys.databases
+WHERE state_desc = 'ONLINE'
+AND database_id > 4;
+
+OPEN DatabaseList;
+FETCH NEXT FROM DatabaseList
+INTO @DatabaseID;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+
+    INSERT INTO dbo.index_physical_stats_history (
+        create_date,
+        database_id,
+        object_id,
+        index_id,
+        partition_number,
+        index_type_desc,
+        alloc_unit_type_desc,
+        index_depth,
+        index_level,
+        avg_fragmentation_in_percent,
+        fragment_count,
+        avg_fragment_size_in_pages,
+        page_count,
+        avg_page_space_used_in_percent,
+        record_count,
+        ghost_record_count,
+        version_ghost_record_count,
+        min_record_size_in_bytes,
+        max_record_size_in_bytes,
+        avg_record_size_in_bytes,
+        forwarded_record_count,
+        compressed_page_count,
+        hobt_id,
+        columnstore_delete_buffer_state,
+        columnstore_delete_buffer_state_desc,
+        version_record_count,
+        inrow_version_record_count,
+        inrow_diff_version_record_count,
+        total_inrow_version_payload_size_in_bytes,
+        offrow_regular_version_record_count,
+        offrow_long_term_version_record_count
+    )
+    SELECT GETDATE(),
+        database_id,
+        object_id,
+        index_id,
+        partition_number,
+        index_type_desc,
+        alloc_unit_type_desc,
+        index_depth,
+        index_level,
+        avg_fragmentation_in_percent,
+        fragment_count,
+        avg_fragment_size_in_pages,
+        page_count,
+        avg_page_space_used_in_percent,
+        record_count,
+        ghost_record_count,
+        version_ghost_record_count,
+        min_record_size_in_bytes,
+        max_record_size_in_bytes,
+        avg_record_size_in_bytes,
+        forwarded_record_count,
+        compressed_page_count,
+        hobt_id,
+        columnstore_delete_buffer_state,
+        columnstore_delete_buffer_state_desc,
+        version_record_count,
+        inrow_version_record_count,
+        inrow_diff_version_record_count,
+        total_inrow_version_payload_size_in_bytes,
+        offrow_regular_version_record_count,
+        offrow_long_term_version_record_count
+    FROM sys.dm_db_index_physical_stats(@DatabaseID, NULL, NULL, NULL, 'SAMPLED');
+
+    FETCH NEXT FROM DatabaseList
+    INTO @DatabaseID;
+END;
+
+CLOSE DatabaseList;
+DEALLOCATE DatabaseList;
+
+--Listing 13-13. Wait Statistics Snapshot and History Table
+USE IndexingMethod;
+GO
+
+CREATE TABLE dbo.wait_stats_snapshot
+    (
+    wait_stats_snapshot_id INT IDENTITY(1, 1),
+    create_date DATETIME2(0),
+    wait_type NVARCHAR(60) NOT NULL,
+    waiting_tasks_count BIGINT NOT NULL,
+    wait_time_ms BIGINT NOT NULL,
+    max_wait_time_ms BIGINT NOT NULL,
+    signal_wait_time_ms BIGINT NOT NULL,
+    CONSTRAINT PK_wait_stats_snapshot
+        PRIMARY KEY CLUSTERED (wait_stats_snapshot_id)
+    );
+
+CREATE TABLE dbo.wait_stats_history
+    (
+    wait_stats_history_id INT IDENTITY(1, 1),
+    create_date DATETIME2(0),
+    wait_type NVARCHAR(60) NOT NULL,
+    waiting_tasks_count BIGINT NOT NULL,
+    wait_time_ms BIGINT NOT NULL,
+    max_wait_time_ms BIGINT NOT NULL,
+    signal_wait_time_ms BIGINT NOT NULL,
+    CONSTRAINT PK_wait_stats_history
+        PRIMARY KEY CLUSTERED (wait_stats_history_id)
+    );
+
+--Listing 13-14. Wait Statistics Snapshot Population
+USE IndexingMethod;
+GO
+
+TRUNCATE TABLE dbo.wait_stats_snapshot
+
+INSERT INTO dbo.wait_stats_snapshot (
+    create_date,
+    wait_type,
+    waiting_tasks_count,
+    wait_time_ms,
+    max_wait_time_ms,
+    signal_wait_time_ms
+)
+SELECT GETDATE(),
+    wait_type,
+    waiting_tasks_count,
+    wait_time_ms,
+    max_wait_time_ms,
+    signal_wait_time_ms
+FROM sys.dm_os_wait_stats;
+
+--Listing 13-15. Wait Statistics History Population
+USE IndexingMethod;
+GO
+
+WITH WaitStatCTE
+  AS (SELECT create_date,
+          DENSE_RANK() OVER (ORDER BY create_date DESC) AS HistoryID,
+          wait_type,
+          waiting_tasks_count,
+          wait_time_ms,
+          max_wait_time_ms,
+          signal_wait_time_ms
+      FROM dbo.wait_stats_snapshot)
+INSERT INTO dbo.wait_stats_history
+SELECT w1.create_date,
+    w1.wait_type,
+    w1.waiting_tasks_count - COALESCE(w2.waiting_tasks_count, 0),
+    w1.wait_time_ms - COALESCE(w2.wait_time_ms, 0),
+    w1.max_wait_time_ms - COALESCE(w2.max_wait_time_ms, 0),
+    w1.signal_wait_time_ms - COALESCE(w2.signal_wait_time_ms, 0)
+FROM WaitStatCTE w1
+LEFT OUTER JOIN WaitStatCTE w2 ON w1.wait_type = w2.wait_type
+                               AND w1.waiting_tasks_count >= COALESCE(w2.waiting_tasks_count, 0)
+                               AND w2.HistoryID = 2
+WHERE w1.HistoryID = 1
+AND w1.waiting_tasks_count - COALESCE(w2.waiting_tasks_count, 0) > 0;
+
+--Listing 13-16. Index Monitoring Snapshot and History Cleanup
+USE IndexingMethod 
+GO
+
+DECLARE @SnapshotDays INT = 3
+    ,@HistoryDays INT = 90
+
+DELETE FROM dbo.index_usage_stats_snapshot
+WHERE create_date < DATEADD(d, -@SnapshotDays, GETDATE())
+
+DELETE FROM dbo.index_usage_stats_history
+WHERE create_date < DATEADD(d, -@HistoryDays, GETDATE())
+
+DELETE FROM dbo.index_operational_stats_snapshot
+WHERE create_date < DATEADD(d, -@SnapshotDays, GETDATE())
+
+DELETE FROM dbo.index_operational_stats_history
+WHERE create_date < DATEADD(d, -@HistoryDays, GETDATE())
+
+DELETE FROM dbo.index_physical_stats_history
+WHERE create_date < DATEADD(d, -@HistoryDays, GETDATE())
+
+DELETE FROM dbo.wait_stats_snapshot
+WHERE create_date < DATEADD(d, -@SnapshotDays, GETDATE())
+
+DELETE FROM dbo.wait_stats_history
+WHERE create_date < DATEADD(d, -@HistoryDays, GETDATE())
+
+--Listing 13-17. Create SQL Trace Session
+USE master;
+GO
+
+DECLARE @rc INT,
+    @TraceID INT,
+    --Maximum .trc file size in MB
+    @maxfilesize BIGINT = 50,
+    --File name and path, minus the extension
+    @FileName NVARCHAR(256) = N'c:\temp\IndexingMethod';
+
+EXEC @rc = sp_trace_create @TraceID OUTPUT, 0, @FileName, @maxfilesize, NULL;
+IF (@rc <> 0)
+    RAISERROR('Error creating trace file', 16, 1);
+
+SELECT *
+FROM sys.traces
+WHERE id = @TraceID;
+
+--Listing 13-18. Add Events and Columns to SQL Trace Session
+USE master;
+GO
+
+DECLARE @on INT = 1,
+    @FileName NVARCHAR(256) = N'c:\temp\IndexingMethod',
+    @TraceID INT;
+
+SET @TraceID = (
+    SELECT id FROM sys.traces WHERE path LIKE @FileName + '%'
+);
+
+-- RPC:Completed
+EXEC sp_trace_setevent @TraceID, 10, 1, @on;
+EXEC sp_trace_setevent @TraceID, 10, 10, @on;
+EXEC sp_trace_setevent @TraceID, 10, 11, @on;
+EXEC sp_trace_setevent @TraceID, 10, 12, @on;
+EXEC sp_trace_setevent @TraceID, 10, 13, @on;
+EXEC sp_trace_setevent @TraceID, 10, 14, @on;
+EXEC sp_trace_setevent @TraceID, 10, 15, @on;
+EXEC sp_trace_setevent @TraceID, 10, 16, @on;
+EXEC sp_trace_setevent @TraceID, 10, 17, @on;
+EXEC sp_trace_setevent @TraceID, 10, 18, @on;
+EXEC sp_trace_setevent @TraceID, 10, 3, @on;
+EXEC sp_trace_setevent @TraceID, 10, 35, @on;
+EXEC sp_trace_setevent @TraceID, 10, 6, @on;
+EXEC sp_trace_setevent @TraceID, 10, 8, @on;
+EXEC sp_trace_setevent @TraceID, 10, 9, @on;
+
+--SQL:BatchCompleted
+EXEC sp_trace_setevent @TraceID, 12, 1, @on;
+EXEC sp_trace_setevent @TraceID, 12, 10, @on;
+EXEC sp_trace_setevent @TraceID, 12, 11, @on;
+EXEC sp_trace_setevent @TraceID, 12, 12, @on;
+EXEC sp_trace_setevent @TraceID, 12, 13, @on;
+EXEC sp_trace_setevent @TraceID, 12, 14, @on;
+EXEC sp_trace_setevent @TraceID, 12, 15, @on;
+EXEC sp_trace_setevent @TraceID, 12, 16, @on;
+EXEC sp_trace_setevent @TraceID, 12, 17, @on;
+EXEC sp_trace_setevent @TraceID, 12, 18, @on;
+EXEC sp_trace_setevent @TraceID, 12, 3, @on;
+EXEC sp_trace_setevent @TraceID, 12, 35, @on;
+EXEC sp_trace_setevent @TraceID, 12, 6, @on;
+EXEC sp_trace_setevent @TraceID, 12, 8, @on;
+EXEC sp_trace_setevent @TraceID, 12, 9, @on;
+
+--Listing 13-19. Add Filters to SQL Trace Session
+USE master;
+GO
+
+DECLARE @intfilter INT = 5,
+    @FileName NVARCHAR(256) = N'c:\temp\IndexingMethod',
+    @TraceID INT;
+
+SET @TraceID = (
+    SELECT id FROM sys.traces WHERE path LIKE @FileName + '%'
+);
+
+--Remove system databases from output
+EXEC sp_trace_setfilter @TraceID, 3, 0, 4, @intfilter;
+
+--Listing 13-20. Start SQL Trace Session
+USE master;
+GO
+
+DECLARE @FileName NVARCHAR(256) = N'c:\temp\IndexingMethod',
+    @TraceID INT;
+
+SET @TraceID = (
+    SELECT id FROM sys.traces WHERE path LIKE @FileName + '%'
+);
+
+-- Set the trace status to start
+EXEC sp_trace_setstatus @TraceID, 1;
+
+--Listing 13-21. Stop SQL Trace Session
+USE master;
+GO
+
+DECLARE @FileName NVARCHAR(256) = N'c:\temp\IndexingMethod',
+    @TraceID INT;
+
+SET @TraceID = (
+    SELECT id FROM sys.traces WHERE path LIKE @FileName + '%'
+);
+
+-- Set the trace status to stop
+EXEC sp_trace_setstatus @TraceID, 0;
+
+--Listing 13-22. Create and Start Extended Events Session
+USE master;
+GO
+
+IF EXISTS (
+    SELECT *
+    FROM sys.server_event_sessions
+    WHERE name = 'EventTracingforIndexTuning'
+)
+    DROP EVENT SESSION [EventTracingforIndexTuning] ON SERVER;
+
+CREATE EVENT SESSION [EventTracingforIndexTuning]
+ON SERVER
+    ADD EVENT sqlserver.rpc_completed
+    (ACTION (
+         package0.process_id,
+         sqlserver.client_app_name,
+         sqlserver.client_hostname,
+         sqlserver.database_id,
+         sqlserver.database_name,
+         sqlserver.nt_username,
+         sqlserver.session_id,
+         sqlserver.sql_text,
+         sqlserver.username
+     )
+    ),
+    ADD EVENT sqlserver.sql_batch_completed
+    (ACTION (
+         package0.process_id,
+         sqlserver.client_app_name,
+         sqlserver.client_hostname,
+         sqlserver.database_id,
+         sqlserver.database_name,
+         sqlserver.nt_username,
+         sqlserver.session_id,
+         sqlserver.sql_text,
+         sqlserver.username
+     )
+    )
+    ADD TARGET package0.event_file
+    (SET filename = N'EventTracingforIndexTuning')
+WITH (
+    STARTUP_STATE = ON
+);
+GO
+
+ALTER EVENT SESSION [EventTracingforIndexTuning] ON SERVER STATE = START;
+GO
+
+--Listing 13-23. Create and Start Extended Events Session
+USE master;
+GO
+
+ALTER EVENT SESSION [EventTracingforIndexTuning] ON SERVER STATE = STOP;
+GO
+
+--Listing 13-24. Enable Query Store on AdventureWorks2017
+USE [master]
+GO
+ALTER DATABASE [AdventureWorks2017] SET QUERY_STORE = ON
+GO
+ALTER DATABASE [AdventureWorks2017] SET QUERY_STORE (OPERATION_MODE = READ_WRITE)
+GO
+
+
+
+
+
+

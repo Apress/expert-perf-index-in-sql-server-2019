@@ -1,0 +1,106 @@
+--Listing 7-1. CREATE TABLE and INSERT Statements Used with Full-Text Search
+USE AdventureWorks2017
+GO
+
+DROP TABLE IF EXISTS dbo.SQLServerDocuments;
+
+CREATE TABLE dbo.SQLServerDocuments (
+     SQLServerDocumentsID INT IDENTITY(1, 1),
+     DocType VARCHAR(6),
+     DOC VARBINARY(MAX),
+     CONSTRAINT PK_SQLServerDocuments PRIMARY KEY CLUSTERED
+        (SQLServerDocumentsID)
+    );
+GO
+DECLARE @worddoc VARBINARY(MAX);
+SELECT  @worddoc = CAST(bulkcolumn AS VARBINARY(MAX))
+FROM    OPENROWSET(BULK 'c:\temp\Optimizing Your Query Plans with the SQL Server 2014 Cardinality Estimator.docx', SINGLE_BLOB) AS x; 
+ 
+INSERT  INTO dbo.SQLServerDocuments
+        (DocType, DOC)
+VALUES  ('docx', @worddoc);
+GO
+
+--Listing 7-2. The CREATE FULLTEXT CATALOG Syntax
+CREATE FULLTEXT CATALOG <catalog name>
+WITH <catalog specific options>
+AS DEFAULT
+AUTHORIZATION <the owners name – ownership>
+ACCENT_SENSITIVITY = <ON|OFF>;
+
+--Listing 7-3. Creating a New Full-Text Catalog
+CREATE FULLTEXT CATALOG WhitePaperCatalog AS DEFAULT;
+
+--Listing 7-4. CREATE FULLTEXT INDEX Syntax
+CREATE FULLTEXT INDEX ON <table name>
+(<column name>)
+KEY INDEX <index name [must be specified]>
+ON <catalog filegroup>
+WITH <index options>
+CHANGE_TRACKING = <Manual | Auto | Off>
+STOPLIST = <default system or specified stoplist name>;
+
+--Listing 7-5. Creating a Full-Text StopList
+CREATE FULLTEXT STOPLIST WhitePaperStopList FROM SYSTEM STOPLIST;
+
+--Listing 7-6. Modifying a Full-Text Stoplist
+ALTER FULLTEXT STOPLIST WhitePaperStopList ADD 'Downtime' LANGUAGE 1033; 
+
+--Listing 7-7. Using sys.fulltext_stoplists to Review StopList Words
+SELECT  lists.stoplist_id,
+        lists.name,
+        words.stopword
+FROM    sys.fulltext_stoplists AS lists
+JOIN    sys.fulltext_stopwords AS words
+        ON lists.stoplist_id = words.stoplist_id
+WHERE   words.language = 'English'
+ORDER BY lists.name;
+
+--Listing 7-8. CREATE FULL TEXT INDEX Statement 
+CREATE FULLTEXT INDEX ON dbo.SQLServerDocuments
+(
+DOC
+TYPE COLUMN DocType
+) 
+KEY INDEX PK_SQLServerDocuments
+ON WhitePaperCatalog
+WITH STOPLIST = WhitePaperStopList;
+
+--Listing 7-9. Using CONTAINS to Query for a Specific Word
+SELECT  ssd.DOC,
+        ssd.DocType
+FROM    dbo.SQLServerDocuments AS ssd
+WHERE   CONTAINS (ssd.DOC, 'statistic');
+
+--Listing 7-10. Querying Properties from Full-Text Index
+FULLTEXTCATALOGPROPERTY ('catalog_name' ,'property')
+
+--Listing 7-11. FULLTEXTCATALOGPROPERTY to Return Population Status of a Catalog
+SELECT FULLTEXTCATALOGPROPERTY('WhitePaperCatalog','PopulateStatus');
+
+--Listing 7-12. Utilizing sys.fulltext_index_catalog_usages
+SELECT  OBJECT_NAME(ficu.object_id) [Object Name],
+        ficu.index_id,
+        ficu.fulltext_catalog_id
+FROM    sys.fulltext_index_catalog_usages AS ficu;
+
+--Listing 7-13. Using All the Catalog Views for Full-Text Index Information
+SELECT  idx.is_enabled,
+        idx.change_tracking_state,
+        idx.crawl_type_desc,
+        idx.crawl_end_date [Last Crawl],
+        cat.name,
+        CASE WHEN cat.is_accent_sensitivity_on = 0 THEN 'Accent InSensitive'
+             WHEN cat.is_accent_sensitivity_on = 1 THEN 'Accent Sensitive'
+        END [Accent Sensitivity],
+        lists.name,
+        lists.modify_date [Last Modified Date of StopList]
+FROM    sys.fulltext_indexes idx
+INNER JOIN sys.fulltext_catalogs cat
+        ON idx.fulltext_catalog_id = cat.fulltext_catalog_id
+INNER JOIN sys.fulltext_stoplists lists
+        ON idx.stoplist_id = lists.stoplist_id;
+
+
+
+

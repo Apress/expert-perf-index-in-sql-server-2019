@@ -1,0 +1,312 @@
+--Listing 8-1. Table with No Index
+USE AdventureWorks2017;
+GO
+
+SELECT * INTO MythOne
+FROM Sales.SalesOrderDetail;
+GO
+
+SET STATISTICS IO ON
+SET NOCOUNT ON
+GO
+
+SELECT SalesOrderID, SalesOrderDetailID, CarrierTrackingNumber, OrderQty, ProductID, SpecialOfferID, UnitPrice, UnitPriceDiscount, LineTotal
+FROM MythOne
+WHERE CarrierTrackingNumber = '4911-403C-98';
+GO
+
+SET STATISTICS IO OFF
+GO
+
+--Listing 8-2. I/O Statistics for Table with No Index
+Table 'MythOne'. Scan count 1, logical reads 1496, physical reads 0, read-ahead reads 0, 
+lob logical reads 0, lob physical reads 0, lob read-ahead reads 0.
+
+--Listing 8-3. Adding an Index to MythOne
+CREATE INDEX IX_CarrierTrackingNumber ON MythOne (CarrierTrackingNumber)
+GO
+
+SET STATISTICS IO ON
+SET NOCOUNT ON
+GO
+
+SELECT SalesOrderID, SalesOrderDetailID, CarrierTrackingNumber, OrderQty, ProductID, SpecialOfferID, UnitPrice, UnitPriceDiscount, LineTotal  
+FROM MythOne
+WHERE CarrierTrackingNumber = '4911-403C-98';
+GO
+
+SET STATISTICS IO OFF
+GO
+
+--Listing 8-4. I/O Statistics for Table with an Index
+Table 'MythOne'. Scan count 1, logical reads 15 physical reads 0, read-ahead reads 0, lob logical reads 0, lob physical reads 0, lob read-ahead reads 0.
+
+--Listing 8-5. Two Ways to Create Primary Keys
+USE AdventureWorks2017;
+GO
+
+CREATE TABLE dbo.MythTwo1
+    (
+    RowID int NOT NULL
+    ,Column1 nvarchar(128)
+    ,Column2 nvarchar(128)
+    );
+
+ALTER TABLE dbo.MythTwo1
+ADD CONSTRAINT PK_MythTwo1 PRIMARY KEY (RowID);
+GO
+
+CREATE TABLE dbo.MythTwo2
+    (
+    RowID int NOT NULL
+    ,Column1 nvarchar(128)
+    ,Column2 nvarchar(128)
+    );
+
+CREATE CLUSTERED INDEX CL_MythTwo2 ON dbo.MythTwo2 (RowID);
+
+ALTER TABLE dbo.MythTwo2
+ADD CONSTRAINT PK_MythTwo2 PRIMARY KEY (RowID);
+GO
+
+SELECT OBJECT_NAME(object_id) AS table_name
+    ,name
+    ,index_id
+    ,type
+    ,type_desc
+    ,is_unique
+    ,is_primary_key
+FROM sys.indexes
+WHERE object_id IN (OBJECT_ID('dbo.MythTwo1'),OBJECT_ID('dbo.MythTwo2'));
+
+--Listing 8-6. MythThree Table Create Script
+USE AdventureWorks2017
+GO
+
+CREATE TABLE dbo.MythThree
+  (
+  RowID int NOT NULL
+  ,Column1 uniqueidentifier
+  );
+WITH L1(z) AS (SELECT 0 UNION ALL SELECT 0)
+, L2(z) AS (SELECT 0 FROM L1 a CROSS JOIN L1 b)
+, L3(z) AS (SELECT 0 FROM L2 a CROSS JOIN L2 b)
+, L4(z) AS (SELECT 0 FROM L3 a CROSS JOIN L3 b)
+, L5(z) AS (SELECT 0 FROM L4 a CROSS JOIN L4 b)
+, L6(z) AS (SELECT TOP 10000000 0 FROM L5 a CROSS JOIN L5 b)
+INSERT INTO dbo.MythThree
+SELECT ROW_NUMBER() OVER (ORDER BY z) AS RowID, NEWID()
+FROM L6;
+GO
+
+SELECT OBJECT_ID('dbo.MythThree')
+GO
+
+--Listing 8-7. Extended Events Session for Lock Acquired and Released
+IF EXISTS(SELECT * FROM sys.server_event_sessions WHERE name = 'MythThreeXevents')
+    DROP EVENT SESSION [MythThreeXevents] ON SERVER
+GO
+
+CREATE EVENT SESSION [MythThreeXevents] ON SERVER
+ADD EVENT sqlserver.lock_acquired(SET collect_database_name=(1)
+  ACTION(sqlserver.sql_text)
+  WHERE [sqlserver].[session_id]=(42) AND [object_id]=(624721278)),
+ADD EVENT sqlserver.lock_released(
+  ACTION(sqlserver.sql_text)
+  WHERE [sqlserver].[session_id]=(42) AND [object_id]=(624721278))
+ADD TARGET package0.ring_buffer
+GO
+
+ALTER EVENT SESSION [MythThreeXevents] ON SERVER STATE = START
+GO
+
+--Listing 8-8. Online Index Operations on Nonclustered Index Creation 
+USE AdventureWorks2017
+GO
+
+CREATE INDEX IX_MythThree_ONLINE ON MythThree (Column1) WITH (ONLINE = ON);
+GO
+
+CREATE INDEX IX_MythThree ON MythThree (Column1);
+GO
+
+--Listing 8-9. Multicolumn Index Myth
+USE AdventureWorks2017
+GO
+IF OBJECT_ID('dbo.MythFour') IS NOT NULL
+    DROP TABLE dbo.MythFour
+GO
+
+SELECT SalesOrderID, OrderDate, DueDate, ShipDate
+INTO dbo.MythFour
+FROM Sales.SalesOrderHeader;
+GO
+
+ALTER TABLE dbo.MythFour
+ADD CONSTRAINT PK_MythFour PRIMARY KEY CLUSTERED (SalesOrderID);
+GO
+
+CREATE NONCLUSTERED INDEX IX_MythFour ON dbo.MythFour (OrderDate, DueDate, ShipDate);
+GO
+
+--Listing 8-10. Query Using Leftmost Column in Index
+USE AdventureWorks2017
+GO
+
+SELECT OrderDate FROM dbo.MythFour
+WHERE OrderDate = '2011-07-17 00:00:00.000' 
+
+--Listing 8-11. Query Using Rightmost Column in Index
+USE AdventureWorks2017
+GO
+
+SELECT ShipDate FROM dbo.MythFour
+WHERE ShipDate = '2011-07-17 00:00:00.000' 
+
+--Listing 8-12. Query Using Middle Column in Index
+USE AdventureWorks2017
+GO
+
+SELECT DueDate FROM dbo.MythFour
+WHERE DueDate = '2011-07-17 00:00:00.000'
+
+--Listing 8-13. Create and Populate MythFive Table
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.MythFive') IS NOT NULL
+    DROP TABLE dbo.MythFive
+
+CREATE TABLE dbo.MythFive
+(
+RowID int PRIMARY KEY CLUSTERED
+,TestValue varchar(20) NOT NULL
+);
+GO
+
+INSERT INTO dbo.MythFive (RowID, TestValue) VALUES (1, 'FirstRecordAdded');
+INSERT INTO dbo.MythFive (RowID, TestValue) VALUES (3, 'SecondRecordAdded');
+INSERT INTO dbo.MythFive (RowID, TestValue) VALUES (2, 'ThirdRecordAdded');
+GO
+
+SELECT database_id, object_id, index_id, extent_page_id, allocated_page_page_id, 
+       page_type_desc
+FROM sys.dm_db_database_page_allocations(DB_ID(), OBJECT_ID('dbo.MythFive'), 1, NULL, 'DETAILED')
+WHERE page_type_desc IS NOT NULL
+GO
+
+--Listing 8-15. Unordered Results with Clustered Index
+USE AdventureWorks2017
+GO
+
+SELECT soh.SalesOrderID, COUNT(*) AS DetailRows
+FROM Sales.SalesOrderHeader soh
+    INNER JOIN Sales.SalesOrderDetail sod ON soh.SalesOrderID = sod.SalesOrderID
+    GROUP BY soh.SalesOrderID;
+GO
+
+DBCC FREEPROCCACHE
+DBCC SETCPUWEIGHT(1000)
+GO
+
+SELECT soh.SalesOrderID, COUNT(*) AS DetailRows
+FROM Sales.SalesOrderHeader soh
+    INNER JOIN Sales.SalesOrderDetail sod ON soh.SalesOrderID = sod.SalesOrderID
+    GROUP BY soh.SalesOrderID;
+GO
+
+DBCC FREEPROCCACHE
+DBCC SETCPUWEIGHT(1)
+GO
+
+--Listing 8-16. Unordered Results with Nonclustered Index
+USE AdventureWorks2017
+GO
+
+SELECT SalesOrderID, CustomerID, Status
+FROM Sales.SalesOrderHeader soh
+GO
+
+SELECT SalesOrderID, CustomerID, Status
+FROM Sales.SalesOrderHeader soh
+WHERE CustomerID IN (11020, 11021, 11022)
+GO
+
+--Listing 8-17. Create and Populate MythSix Table
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.MythSeven') IS NOT NULL
+    DROP TABLE dbo.MythSeven;
+GO
+
+CREATE TABLE dbo.MythSeven
+  (
+  RowID int NOT NULL
+  ,Column1 varchar(500)
+  );
+GO
+
+ALTER TABLE dbo.MythSeven ADD CONSTRAINT
+    PK_MythSeven PRIMARY KEY CLUSTERED (RowID) WITH(FILLFACTOR = 50);
+GO
+
+WITH L1(z) AS (SELECT 0 UNION ALL SELECT 0)
+, L2(z) AS (SELECT 0 FROM L1 a CROSS JOIN L1 b)
+, L3(z) AS (SELECT 0 FROM L2 a CROSS JOIN L2 b)
+, L4(z) AS (SELECT 0 FROM L3 a CROSS JOIN L3 b)
+, L5(z) AS (SELECT 0 FROM L4 a CROSS JOIN L4 b)
+, L6(z) AS (SELECT TOP 1000 0 FROM L5 a CROSS JOIN L5 b)
+INSERT INTO dbo.MythSeven
+SELECT ROW_NUMBER() OVER (ORDER BY z) AS RowID, REPLICATE('X', 500)
+FROM L6;
+GO
+
+SELECT object_id, index_id, avg_page_space_used_in_percent
+FROM sys.dm_db_index_physical_stats(DB_ID(),OBJECT_ID('dbo.MythSeven'),NULL,NULL,'DETAILED')
+WHERE index_level = 0;
+
+--Listing 8-18. Rebuild Clustered Index on MythSeven Table
+USE AdventureWorks2017
+GO
+
+ALTER INDEX PK_MythSeven ON dbo.MythSeven REBUILD
+
+SELECT object_id, index_id, avg_page_space_used_in_percent
+FROM sys.dm_db_index_physical_stats(DB_ID(),OBJECT_ID('dbo.MythSeven'),NULL,NULL,'DETAILED')
+WHERE index_level = 0
+
+--Listing 8-19. Reusing Data From the MythEight Heap
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.MythEight') IS NOT NULL
+    DROP TABLE dbo.MythEight;
+
+CREATE TABLE dbo.MythEight
+(
+    RowId INT IDENTITY(1,1)
+    ,FillerData VARCHAR(2500)  
+);
+
+INSERT INTO dbo.MythEight (FillerData)
+SELECT TOP 400 REPLICATE('X',2000)
+FROM sys.objects;
+
+SELECT OBJECT_NAME(object_id), index_type_desc, page_count, record_count, forwarded_record_count
+FROM sys.dm_db_index_physical_stats (DB_ID(), OBJECT_ID('dbo.MythEight'), NULL, NULL, 'DETAILED');
+
+DELETE FROM dbo.MythEight
+WHERE RowId % 2 = 0;
+
+SELECT OBJECT_NAME(object_id), index_type_desc, page_count, record_count, forwarded_record_count
+FROM sys.dm_db_index_physical_stats (DB_ID(), OBJECT_ID('dbo.MythEight'), NULL, NULL, 'DETAILED');
+
+INSERT INTO dbo.MythEight (FillerData)
+SELECT TOP 200 REPLICATE('X',2000)
+FROM sys.objects;
+
+SELECT OBJECT_NAME(object_id), index_type_desc, page_count, record_count, forwarded_record_count
+FROM sys.dm_db_index_physical_stats (DB_ID(), OBJECT_ID('dbo.MythEight'), NULL, NULL, 'DETAILED');
+
+

@@ -1,0 +1,178 @@
+--Listing 10-1. SQL Statements to Generate Missing Index Suggestions
+USE AdventureWorks2017
+GO
+
+SELECT DueDate FROM Sales.SalesOrderHeader
+WHERE DueDate = '2014-07-01 00:00:00.000'
+AND OrderDate = '2014-06-19 00:00:00.000'
+GO
+SELECT DueDate FROM Sales.SalesOrderHeader
+WHERE OrderDate Between '20140601' AND '20140630'
+AND DueDate Between '20140701' AND '20140731'
+GO
+SELECT DueDate, OrderDate FROM Sales.SalesOrderHeader
+WHERE DueDate Between '20140701' AND '20140731'
+GO
+SELECT CustomerID, OrderDate FROM Sales.SalesOrderHeader
+WHERE OrderDate Between '20140601' AND '20140630'
+AND DueDate Between '20140701' AND '20140731'
+GO
+
+--Listing 10-2. Query for Missing Index DMOs
+SELECT 
+    DB_NAME(database_id) AS database_name
+    ,OBJECT_NAME(object_id, database_id) AS table_name
+    ,mid.equality_columns
+    ,mid.inequality_columns
+    ,mid.included_columns
+    ,(migs.user_seeks + migs.user_scans) * migs.avg_user_impact AS Impact
+    ,migs.avg_total_user_cost * (migs.avg_user_impact / 100.0) * (migs.user_seeks + migs.user_scans) AS Score
+    ,migs.user_seeks
+    ,migs.user_scans
+FROM sys.dm_db_missing_index_details mid
+        INNER JOIN sys.dm_db_missing_index_groups mig ON mid.index_handle = mig.index_handle
+        INNER JOIN sys.dm_db_missing_index_group_stats migs ON mig.index_group_handle = migs.group_handle
+WHERE DB_NAME(database_id) = 'AdventureWorks2017'
+ORDER BY migs.avg_total_user_cost * (migs.avg_user_impact / 100.0) * (migs.user_seeks + migs.user_scans) DESC
+
+--Listing 10-3. Index from Missing Index DMOs
+CREATE NONCLUSTERED INDEX missing_index_SalesOrderHeader
+ON Sales.SalesOrderHeader([DueDate], [OrderDate])
+INCLUDE ([CustomerID])
+
+--Listing 10-4. DDL Statement to Drop Index missing_index_SalesOrderHeader
+DROP INDEX IF EXISTS Sales.SalesOrderHeader.missing_index_SalesOrderHeader;
+
+--Listing 10-5. Database Engine Tuning Advisor Index Recommendations
+use [AdventureWorks2017]
+go
+
+CREATE NONCLUSTERED INDEX [_dta_index_SalesOrderHeader_8_1922105888__K4_K3_11] ON [Sales].[SalesOrderHeader]
+(
+	[DueDate] ASC,
+	[OrderDate] ASC
+)
+INCLUDE([CustomerID]) WITH (SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ONLINE = OFF) ON [PRIMARY]
+go
+
+--Listing 10-6. DTA Utility Syntax
+dta
+[ -? ] |
+[
+      [ -S server_name[ \instance ] ]
+      { { -U login_id [-P password ] } | –E  }
+      { -D database_name [ ,...n ] }
+      [ -d database_name ] 
+      [ -Tl table_list | -Tf table_list_file ]
+      { -if workload_file | -it workload_trace_table_name  | -ip | -ipf }
+      { -ssession_name | -IDsession_ID }
+      [ -F ]
+      [ -of output_script_file_name ]
+      [ -or output_xml_report_file_name ]
+      [ -ox output_XML_file_name ]
+      [ -rl analysis_report_list [ ,...n ] ]
+      [ -ix input_XML_file_name ]
+      [ -A time_for_tuning_in_minutes ]
+      [ -n number_of_events ]
+      [ -m minimum_improvement ]
+      [ -fa physical_design_structures_to_add ]
+      [ -fi filtered_indexes]
+      [ -fc columnstore_indexes]
+      [ -fp partitioning_strategy ]
+      [ -fk keep_existing_option ]
+      [ -fx drop_only_mode ]
+      [ -B storage_size ]
+      [ -c max_key_columns_in_index ]
+      [ -C max_columns_in_index ]
+      [ -e | -e tuning_log_name ]
+      [ -N online_option]
+      [ -q ]
+      [ -u ]
+      [ -x ]
+      [ -a ]
+]
+
+--Listing 10-7. Scenario Setup
+USE AdventureWorks2017
+GO
+
+IF OBJECT_ID('dbo.SalesOrderDetail') IS NOT NULL
+        DROP TABLE dbo.SalesOrderDetail;
+SELECT SalesOrderID, SalesOrderDetailID, CarrierTrackingNumber, OrderQty, ProductID, SpecialOfferID, UnitPrice, UnitPriceDiscount, LineTotal, rowguid, ModifiedDate
+INTO dbo.SalesOrderDetail
+FROM Sales.SalesOrderDetail;
+
+CREATE CLUSTERED INDEX CL_SalesOrderDetail ON dbo.SalesOrderDetail(SalesOrderDetailID);
+
+CREATE NONCLUSTERED INDEX IX_SalesOrderDetail ON dbo.SalesOrderDetail(SalesOrderID);
+GO
+
+SELECT SalesOrderID, CarrierTrackingNumber
+INTO #temp
+FROM dbo.SalesOrderDetail
+WHERE SalesOrderID = 43660;
+DROP TABLE #temp;
+GO 1000
+
+SELECT SalesOrderID, OrderQty
+INTO #temp
+FROM dbo.SalesOrderDetail
+WHERE SalesOrderID = 43661;
+DROP TABLE #temp;
+GO 1000
+
+--Listing 10-8. First Scenario DTA Utility Syntax
+"C:\Program Files (x86)\Microsoft SQL Server Management Studio 18\Common7\dta" -S localhost -E -D AdventureWorks2017 -d AdventureWorks2017 -ip -s "First Scenario" -Tl AdventureWorks2017.dbo.SalesOrderDetail -of "C:\Temp\First Scenario.sql" -fa NCL_IDX -fp NONE  -fk ALL
+
+--Listing 10-9. First Scenario DTA Utility Output
+use [AdventureWorks2017]
+go
+
+CREATE NONCLUSTERED INDEX [_dta_index_SalesOrderDetail_8_2119678599__K1_K2_3] ON [dbo].[SalesOrderDetail]
+(
+	[SalesOrderID] ASC,
+	[SalesOrderDetailID] ASC
+)
+INCLUDE([CarrierTrackingNumber]) WITH (SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ONLINE = OFF) ON [PRIMARY]
+go
+
+CREATE NONCLUSTERED INDEX [_dta_index_SalesOrderDetail_8_2119678599__K1_K2_4] ON [dbo].[SalesOrderDetail]
+(
+	[SalesOrderID] ASC,
+	[SalesOrderDetailID] ASC
+)
+INCLUDE([OrderQty]) WITH (SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ONLINE = OFF) ON [PRIMARY]
+go
+
+CREATE STATISTICS [_dta_stat_2119678599_2_1] ON [dbo].[SalesOrderDetail]([SalesOrderDetailID], [SalesOrderID])
+go
+
+--Listing 10-10. Second Scenario DTA Utility Syntax
+"C:\Program Files (x86)\Microsoft SQL Server Management Studio 18\Common7\dta" -S localhost -D AdventureWorks2017 -d AdventureWorks2017 -ip -s "Second Scenario" -Tl AdventureWorks2017.dbo.SalesOrderDetail -of "C:\Temp\Second Scenario.sql" -fa IDX_IV -fp NONE -fk ALL -rl ALL
+
+--Listing 10-11. Second Scenario DTA Utility Output
+use [AdventureWorks2017]
+go
+
+SET ANSI_PADDING ON
+
+go
+
+CREATE NONCLUSTERED INDEX [_dta_index_SalesOrderDetail_7_1895677801__K1_K2_3] ON [dbo].[SalesOrderDetail]
+(
+    [SalesOrderID] ASC,
+    [SalesOrderDetailID] ASC
+)
+INCLUDE (     [CarrierTrackingNumber]) WITH (SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ONLINE = OFF) ON [PRIMARY]
+go
+
+CREATE NONCLUSTERED INDEX [_dta_index_SalesOrderDetail_7_1895677801__K1_K2_4] ON [dbo].[SalesOrderDetail]
+(
+    [SalesOrderID] ASC,
+    [SalesOrderDetailID] ASC
+)
+INCLUDE (     [OrderQty]) WITH (SORT_IN_TEMPDB = OFF, DROP_EXISTING = OFF, ONLINE = OFF) ON [PRIMARY]
+go
+
+
+
